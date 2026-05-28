@@ -1,0 +1,127 @@
+import re
+from collections import Counter
+
+from commanderai.models import Card, DeckPick, DeckSlot
+
+_PIP_PATTERN = re.compile(r"\{([WUBRG])\}")
+
+_COLOR_TO_BASIC = {
+    "W": "Plains",
+    "U": "Island",
+    "B": "Swamp",
+    "R": "Mountain",
+    "G": "Forest",
+}
+
+
+def count_pips(cards: list[Card]) -> Counter:
+    pips: Counter = Counter()
+    for card in cards:
+        if "Land" in card.type_line:
+            continue
+        for match in _PIP_PATTERN.finditer(card.mana_cost):
+            pips[match.group(1)] += 1
+    return pips
+
+
+def build_mana_base(
+    nonland_cards: list[Card],
+    collection_lands: list[Card],
+    commander: Card,
+    land_count: int = 37,
+) -> list[DeckPick]:
+    pips = count_pips(nonland_cards + [commander])
+    identity = set(commander.color_identity)
+
+    priority_lands = _sort_lands_by_priority(collection_lands, identity)
+
+    selected: list[DeckPick] = []
+    used_names: set[str] = set()
+
+    for land in priority_lands:
+        if len(selected) >= land_count - 5:
+            break
+        if land.name in used_names:
+            continue
+        if _is_basic_land(land):
+            continue
+        used_names.add(land.name)
+        selected.append(DeckPick(card=land, slot=DeckSlot.LAND, reason="utility/dual land"))
+
+    basics_needed = land_count - len(selected)
+    if basics_needed > 0:
+        basic_picks = _distribute_basics(pips, identity, basics_needed)
+        selected.extend(basic_picks)
+
+    return selected[:land_count]
+
+
+def _sort_lands_by_priority(lands: list[Card], identity: set[str]) -> list[Card]:
+    def priority_key(land: Card) -> tuple[int, int]:
+        name_lower = land.name.lower()
+        rank = land.edhrec_rank or 99999
+
+        if name_lower == "command tower":
+            return (0, 0)
+        if "fetch" in _land_category(land):
+            return (1, rank)
+        if _produces_multiple_colors(land, identity):
+            return (2, rank)
+        return (3, rank)
+
+    return sorted(lands, key=priority_key)
+
+
+def _produces_multiple_colors(land: Card, identity: set[str]) -> bool:
+    text = (land.oracle_text or "").lower()
+    colors_produced = 0
+    for color in identity:
+        basic_name = _COLOR_TO_BASIC.get(color, "").lower()
+        if f"{{{color.lower()}}}" in text or basic_name in text or f"add {{{color}}}" in text.upper():
+            colors_produced += 1
+    return colors_produced >= 2
+
+
+def _land_category(land: Card) -> str:
+    text = (land.oracle_text or "").lower()
+    if "search your library" in text and "land" in text:
+        return "fetch"
+    return "other"
+
+
+def _distribute_basics(pips: Counter, identity: set[str], count: int) -> list[DeckPick]:
+    total = sum(pips.get(c, 0) for c in identity) or 1
+    picks: list[DeckPick] = []
+
+    for color in sorted(identity):
+        ratio = pips.get(color, 1) / total
+        num = max(1, round(ratio * count))
+        basic_name = _COLOR_TO_BASIC.get(color)
+        if not basic_name:
+            continue
+        for _ in range(num):
+            if len(picks) >= count:
+                break
+            basic = Card(
+                name=basic_name,
+                type_line="Basic Land",
+                color_identity=[],
+                oracle_text=f"({{{color}}})",
+            )
+            picks.append(DeckPick(card=basic, slot=DeckSlot.LAND, reason="basic land"))
+
+    while len(picks) < count:
+        fallback_color = max(identity, key=lambda c: pips.get(c, 0))
+        basic = Card(
+            name=_COLOR_TO_BASIC[fallback_color],
+            type_line="Basic Land",
+            color_identity=[],
+            oracle_text=f"({{{fallback_color}}})",
+        )
+        picks.append(DeckPick(card=basic, slot=DeckSlot.LAND, reason="basic land"))
+
+    return picks[:count]
+
+
+def _is_basic_land(card: Card) -> bool:
+    return "basic" in card.type_line.lower() and "land" in card.type_line.lower()

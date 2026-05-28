@@ -1,0 +1,99 @@
+import time
+from pathlib import Path
+
+import httpx
+import orjson
+
+from commanderai.config import (
+    BULK_DATA_MAX_AGE_DAYS,
+    CACHE_DIR,
+    ORACLE_CARDS_PATH,
+    SCRYFALL_BULK_URL,
+    SCRYFALL_USER_AGENT,
+)
+from commanderai.models import Card
+
+
+def _ensure_cache_dir():
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _is_stale(path: Path, max_age_days: int) -> bool:
+    if not path.exists():
+        return True
+    age_seconds = time.time() - path.stat().st_mtime
+    return age_seconds > max_age_days * 86400
+
+
+def fetch_bulk_download_url() -> str:
+    resp = httpx.get(
+        SCRYFALL_BULK_URL,
+        headers={"User-Agent": SCRYFALL_USER_AGENT},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    for item in data["data"]:
+        if item["type"] == "oracle_cards":
+            return item["download_uri"]
+    raise RuntimeError("oracle_cards bulk data not found in Scryfall response")
+
+
+def download_bulk_data(force: bool = False) -> Path:
+    _ensure_cache_dir()
+    if not force and not _is_stale(ORACLE_CARDS_PATH, BULK_DATA_MAX_AGE_DAYS):
+        return ORACLE_CARDS_PATH
+
+    url = fetch_bulk_download_url()
+    with httpx.stream("GET", url, headers={"User-Agent": SCRYFALL_USER_AGENT}, timeout=300) as resp:
+        resp.raise_for_status()
+        with open(ORACLE_CARDS_PATH, "wb") as f:
+            for chunk in resp.iter_bytes(chunk_size=1024 * 256):
+                f.write(chunk)
+
+    return ORACLE_CARDS_PATH
+
+
+def load_cards(path: Path | None = None) -> list[Card]:
+    path = path or ORACLE_CARDS_PATH
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Oracle cards not found at {path}. Run 'commanderai update-data' first."
+        )
+
+    raw = path.read_bytes()
+    cards_data = orjson.loads(raw)
+
+    cards = []
+    for c in cards_data:
+        if c.get("legalities", {}).get("commander") != "legal":
+            continue
+
+        oracle_text = c.get("oracle_text", "") or ""
+        if not oracle_text and c.get("card_faces"):
+            oracle_text = " // ".join(
+                face.get("oracle_text", "") for face in c["card_faces"]
+            )
+
+        cards.append(
+            Card(
+                name=c["name"],
+                mana_cost=c.get("mana_cost", "") or "",
+                cmc=c.get("cmc", 0.0),
+                type_line=c.get("type_line", ""),
+                oracle_text=oracle_text,
+                color_identity=c.get("color_identity", []),
+                colors=c.get("colors", []),
+                keywords=c.get("keywords", []),
+                edhrec_rank=c.get("edhrec_rank"),
+                power=c.get("power"),
+                toughness=c.get("toughness"),
+                legalities=c.get("legalities", {}),
+                prices=c.get("prices", {}),
+                set_code=c.get("set", ""),
+                collector_number=c.get("collector_number", ""),
+                card_faces=c.get("card_faces"),
+            )
+        )
+
+    return cards

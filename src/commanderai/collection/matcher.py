@@ -1,0 +1,46 @@
+import difflib
+
+from commanderai.data.card_index import CardIndex
+from commanderai.models import Card, CollectionEntry
+
+
+class MatchResult:
+    def __init__(self):
+        self.matched: list[CollectionEntry] = []
+        self.unmatched: list[str] = []
+        self.fuzzy_matched: list[tuple[str, str]] = []
+
+
+def match_collection(entries: list[CollectionEntry], index: CardIndex) -> MatchResult:
+    result = MatchResult()
+    all_names = list(index.by_name_lower.keys())
+
+    for entry in entries:
+        card = index.get(entry.card_name)
+        if card:
+            entry.card = card
+            result.matched.append(entry)
+            continue
+
+        close = difflib.get_close_matches(
+            entry.card_name.lower(), all_names, n=1, cutoff=0.85
+        )
+        if close:
+            card = index.by_name_lower[close[0]]
+            entry.card = card
+            result.matched.append(entry)
+            result.fuzzy_matched.append((entry.card_name, card.name))
+        else:
+            result.unmatched.append(entry.card_name)
+
+    return result
+
+
+def get_unique_cards(entries: list[CollectionEntry]) -> list[Card]:
+    seen: set[str] = set()
+    cards: list[Card] = []
+    for entry in entries:
+        if entry.card and entry.card.name not in seen:
+            seen.add(entry.card.name)
+            cards.append(entry.card)
+    return cards
