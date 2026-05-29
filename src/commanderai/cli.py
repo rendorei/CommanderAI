@@ -54,10 +54,14 @@ def build(
         raise typer.Exit(1)
 
     match_result = match_collection(entries, index)
-    console.print(
-        f"[green]Matched {len(match_result.matched)} cards[/green]"
-        f"[dim] ({len(match_result.unmatched)} unmatched)[/dim]"
-    )
+    skipped = len(match_result.skipped_tokens)
+    unmatched = len(match_result.unmatched)
+    status_parts = [f"[green]Matched {len(match_result.matched)} cards[/green]"]
+    if skipped:
+        status_parts.append(f"[dim]{skipped} tokens/special skipped[/dim]")
+    if unmatched:
+        status_parts.append(f"[dim]{unmatched} unmatched[/dim]")
+    console.print(" | ".join(status_parts))
 
     if match_result.fuzzy_matched:
         for original, corrected in match_result.fuzzy_matched[:5]:
@@ -81,6 +85,13 @@ def build(
 
     collection_cards = get_unique_cards(match_result.matched)
 
+    if len(collection_cards) < 20:
+        console.print(
+            f"[red]Collection too small ({len(collection_cards)} cards). "
+            f"Need at least ~60+ cards in commander's colors to build a playable deck.[/red]"
+        )
+        raise typer.Exit(1)
+
     with Progress(
         SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console
     ) as progress:
@@ -89,6 +100,20 @@ def build(
 
     total_candidates = sum(len(v) for v in candidates.values() if v)
     console.print(f"[dim]Found {total_candidates} candidate cards across all slots[/dim]")
+
+    target_nonland = 99 - lands
+    if total_candidates < target_nonland:
+        console.print(
+            f"\n[yellow]Warning: Only {total_candidates} eligible cards found "
+            f"(need {target_nonland} nonland + {lands} lands).[/yellow]"
+        )
+        if total_candidates < 30:
+            console.print(
+                f"[red]Not enough cards in {'/'.join(commander.color_identity) or 'colorless'} "
+                f"to build a viable deck. Try a commander with more color overlap.[/red]"
+            )
+            raise typer.Exit(1)
+        console.print("[yellow]Building best possible deck — will be underpowered.[/yellow]\n")
 
     if no_llm:
         console.print("[dim]Using heuristic selection (--no-llm)[/dim]")
@@ -117,6 +142,36 @@ def build(
                         )
                 strategy = ""
                 upgrades = []
+
+    # Backfill if LLM returned fewer than needed
+    target_nonland = 99 - lands
+    if len(deck_picks) < target_nonland:
+        deficit = target_nonland - len(deck_picks)
+        picked_names = {p.card.name for p in deck_picks}
+        fallback = heuristic_pick(candidates, lands)
+        backfill: list[DeckPick] = []
+        for slot, scored_list in fallback.items():
+            for sc in scored_list:
+                if sc.card.name not in picked_names:
+                    backfill.append(DeckPick(card=sc.card, slot=sc.slot, reason="backfill"))
+                    picked_names.add(sc.card.name)
+        backfill.sort(key=lambda p: p.card.edhrec_rank or 99999)
+        deck_picks.extend(backfill[:deficit])
+        actually_filled = min(deficit, len(backfill))
+        if actually_filled > 0:
+            console.print(f"[dim]Backfilled {actually_filled} cards[/dim]")
+        if len(deck_picks) < target_nonland:
+            shortfall = target_nonland - len(deck_picks)
+            console.print(
+                f"\n[yellow]Warning: Collection short by {shortfall} cards. "
+                f"Deck will have {len(deck_picks) + 1 + lands} cards instead of 100.[/yellow]"
+            )
+            console.print(
+                f"[yellow]Adding {shortfall} extra lands to fill. "
+                f"Consider acquiring more cards in "
+                f"{'/'.join(commander.color_identity) or 'colorless'}.[/yellow]\n"
+            )
+            lands += shortfall
 
     land_cards = [c for c in collection_cards if classify_card(c) == DeckSlot.LAND]
     land_picks = build_mana_base(
@@ -388,6 +443,50 @@ def explain(
             raise typer.Exit(1)
 
     console.print(explanation)
+
+
+@app.command()
+def tokens(
+    deck_file: Path = typer.Option(..., "--deck", "-d", help="Deck file to analyze"),
+):
+    """List all tokens that cards in a deck can create."""
+    from commanderai.deckbuilder.tokens import extract_tokens
+
+    index = _load_index()
+
+    entries = parse_collection(deck_file)
+    if not entries:
+        console.print("[red]No cards found in deck file[/red]")
+        raise typer.Exit(1)
+
+    match_result = match_collection(entries, index)
+    matched_cards = [e.card for e in match_result.matched if e.card]
+
+    token_list = extract_tokens(matched_cards)
+
+    if not token_list:
+        console.print("[yellow]No token-creating cards found in this deck.[/yellow]")
+        raise typer.Exit(0)
+
+    console.print(f"[bold]Tokens needed ({len(token_list)} unique):[/bold]\n")
+    for t in token_list:
+        parts = []
+        if t.power and t.toughness:
+            parts.append(f"{t.power}/{t.toughness}")
+        if t.colors:
+            parts.append(" ".join(t.colors))
+        if t.types:
+            parts.append(t.types)
+        parts.append(f"— {t.name}")
+        if t.keywords:
+            parts.append(f"({', '.join(t.keywords)})")
+
+        header = " ".join(parts)
+        creators = ", ".join(t.created_by)
+        console.print(f"  [green]•[/green] {header}")
+        console.print(f"    [dim]Created by: {creators}[/dim]")
+
+    console.print(f"\n[dim]Total: {len(token_list)} unique tokens from {len(matched_cards)} cards[/dim]")
 
 
 if __name__ == "__main__":

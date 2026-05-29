@@ -22,8 +22,21 @@ def parse_collection(source: str | Path) -> list[CollectionEntry]:
     if not lines:
         return []
 
-    if _looks_like_csv(lines[0]):
-        return _parse_csv(text)
+    # Find first non-comment, non-empty line to detect format
+    first_content = ""
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and not stripped.startswith("//"):
+            first_content = stripped
+            break
+
+    if not first_content:
+        return []
+
+    if _looks_like_csv(first_content):
+        # Strip comment lines before CSV parsing
+        csv_lines = [l for l in lines if not l.strip().startswith("#") and not l.strip().startswith("//")]
+        return _parse_csv("\n".join(csv_lines))
     return _parse_text(lines)
 
 

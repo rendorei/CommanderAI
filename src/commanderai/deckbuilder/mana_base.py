@@ -33,7 +33,13 @@ def build_mana_base(
     pips = count_pips(nonland_cards + [commander])
     identity = set(commander.color_identity)
 
-    priority_lands = _sort_lands_by_priority(collection_lands, identity)
+    # Filter lands to commander's color identity (colorless lands always legal)
+    legal_lands = [
+        l for l in collection_lands
+        if set(l.color_identity).issubset(identity)
+    ]
+
+    priority_lands = _sort_lands_by_priority(legal_lands, identity)
 
     selected: list[DeckPick] = []
     used_names: set[str] = set()

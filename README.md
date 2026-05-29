@@ -8,6 +8,7 @@ AI-powered Magic: The Gathering Commander deck builder that works with **your ac
 - **Suggests commanders** from cards you own, ranked by how many supporting cards you have
 - **Suggests upgrades** — cards to buy that synergize with your commander
 - **Explains decks** — AI breakdown of strategy, synergies, and how to play
+- **Lists tokens** — shows all tokens your deck can create (so you can grab the right token cards)
 - **Exports** to Moxfield, Archidekt, MTGO formats
 
 ## Quick Start
@@ -39,6 +40,7 @@ commanderai build -c data/my_collection.txt -C "Atraxa, Praetors' Voice"
 | `suggest-commanders` | Find the best commanders in your collection |
 | `suggest` | Recommend cards to buy for a specific commander |
 | `explain` | AI explanation of a deck's strategy and synergies |
+| `tokens` | List all tokens a deck can create |
 | `convert` | Convert Archidekt/CSV export to simple text format |
 | `update-data` | Download/refresh Scryfall card database |
 | `validate` | Check a deck for Commander legality |
@@ -56,6 +58,10 @@ commanderai build \
   -o decks/my_deck.txt \         # Output path (default: decks/<commander>.txt)
   -v                             # Verbose — show why each card was picked
 ```
+
+## Output
+
+Decks auto-save to `decks/` directory. Running build with the same commander creates numbered files (`atraxa.txt`, `atraxa_2.txt`, `atraxa_3.txt`...) — previous builds are never overwritten.
 
 ## How It Works
 
@@ -84,6 +90,15 @@ Quantity,Name,Edition Code,...
 1,Sol Ring,c21,...
 ```
 
+## Token Tracking
+
+```bash
+# See all tokens your deck needs
+commanderai tokens -d decks/atraxa.txt
+```
+
+Shows each unique token with P/T, colors, keywords, and which cards create it — so you know which token cards to bring to the table.
+
 ## Upgrade Suggestions
 
 ```bash
@@ -93,6 +108,13 @@ commanderai suggest -c data/my_collection.txt -C "Avatar Aang // Aang, Master of
 # AI-powered (needs API key, explains WHY each card is good)
 commanderai suggest -c data/my_collection.txt -C "Avatar Aang // Aang, Master of Elements"
 ```
+
+## Edge Cases
+
+- **Small collections** (<100 cards): warns you upfront, builds best possible deck with available cards, fills remaining slots with basic lands
+- **Not enough on-color cards**: detects thin pools, adjusts land count upward, notifies you
+- **Tokens/special cards in collection**: automatically detected and skipped (not reported as errors)
+- **LLM returns too few picks**: backfills from heuristic candidates, then pads with basics to guarantee 100 cards
 
 ## Requirements
 

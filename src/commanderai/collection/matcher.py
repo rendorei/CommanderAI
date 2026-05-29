@@ -4,11 +4,37 @@ from commanderai.data.card_index import CardIndex
 from commanderai.models import Card, CollectionEntry
 
 
+_SKIP_NAMES = {
+    "double-faced substitute card",
+}
+
+_SKIP_PATTERNS = [
+    "token",
+    "emblem",
+    "plane —",
+    "phenomenon",
+]
+
+
 class MatchResult:
     def __init__(self):
         self.matched: list[CollectionEntry] = []
         self.unmatched: list[str] = []
         self.fuzzy_matched: list[tuple[str, str]] = []
+        self.skipped_tokens: list[str] = []
+
+
+def _is_likely_token_or_special(name: str) -> bool:
+    lower = name.lower()
+    if lower in _SKIP_NAMES:
+        return True
+    # Single-word names are almost always tokens (Assassin, Elemental, Spirit, etc.)
+    if " " not in name and len(name) > 2 and "'" not in name:
+        return True
+    # Common token indicators
+    if "—" in name and len(name.split("—")[0].strip().split()) <= 2:
+        return True
+    return False
 
 
 def match_collection(entries: list[CollectionEntry], index: CardIndex) -> MatchResult:
@@ -30,6 +56,8 @@ def match_collection(entries: list[CollectionEntry], index: CardIndex) -> MatchR
             entry.card = card
             result.matched.append(entry)
             result.fuzzy_matched.append((entry.card_name, card.name))
+        elif _is_likely_token_or_special(entry.card_name):
+            result.skipped_tokens.append(entry.card_name)
         else:
             result.unmatched.append(entry.card_name)
 
