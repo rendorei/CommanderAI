@@ -1,6 +1,8 @@
+import random
 import re
 from collections import Counter
 
+from commanderai.deckbuilder.variety import softmax_weights, weighted_sample_without_replacement
 from commanderai.models import Card, DeckPick, DeckSlot
 
 _PIP_PATTERN = re.compile(r"\{([WUBRG])\}")
@@ -42,6 +44,8 @@ def build_mana_base(
     collection_lands: list[Card],
     commander: Card,
     land_count: int = 37,
+    rng: random.Random | None = None,
+    variety: float = 0.0,
 ) -> list[DeckPick]:
     pips = count_pips(nonland_cards + [commander])
     identity = set(commander.color_identity)
@@ -52,17 +56,14 @@ def build_mana_base(
         if set(l.color_identity).issubset(identity)
     ]
 
-    priority_lands = _sort_lands_by_priority(legal_lands, identity)
+    nonbasic = [l for l in legal_lands if not _is_basic_land(l)]
+    nonbasic_target = land_count - 5
+    chosen_lands = _choose_nonbasic_lands(nonbasic, identity, nonbasic_target, rng, variety)
 
     selected: list[DeckPick] = []
     used_names: set[str] = set()
-
-    for land in priority_lands:
-        if len(selected) >= land_count - 5:
-            break
+    for land in chosen_lands:
         if land.name in used_names:
-            continue
-        if _is_basic_land(land):
             continue
         used_names.add(land.name)
         selected.append(DeckPick(card=land, slot=DeckSlot.LAND, reason="utility/dual land"))
@@ -75,18 +76,51 @@ def build_mana_base(
     return selected[:land_count]
 
 
+def _choose_nonbasic_lands(
+    nonbasic: list[Card],
+    identity: set[str],
+    target: int,
+    rng: random.Random | None,
+    variety: float,
+) -> list[Card]:
+    """Pick which nonbasic lands to run.
+
+    Deterministic (variety 0) keeps the strict priority order. With variety, the
+    lands are sampled weighted by priority so the same fetch/dual package isn't
+    grabbed verbatim every build.
+    """
+    ordered = _sort_lands_by_priority(nonbasic, identity)
+    if target <= 0:
+        return []
+    if variety <= 0 or rng is None or len(ordered) <= target:
+        return ordered[:target]
+    weights = softmax_weights([_land_priority_score(l, identity) for l in ordered], variety)
+    sampled = weighted_sample_without_replacement(rng, ordered, weights, target)
+    sampled.sort(key=lambda l: _land_priority_score(l, identity), reverse=True)
+    return sampled
+
+
+def _land_priority_tier(land: Card, identity: set[str]) -> int:
+    name_lower = land.name.lower()
+    if name_lower == "command tower":
+        return 0
+    if "fetch" in _land_category(land):
+        return 1
+    if _produces_multiple_colors(land, identity):
+        return 2
+    return 3
+
+
+def _land_priority_score(land: Card, identity: set[str]) -> float:
+    tier = _land_priority_tier(land, identity)
+    rank = land.edhrec_rank or 99999
+    return (3 - tier) * 100 + max(0.0, 100 - rank / 300)
+
+
 def _sort_lands_by_priority(lands: list[Card], identity: set[str]) -> list[Card]:
     def priority_key(land: Card) -> tuple[int, int]:
-        name_lower = land.name.lower()
         rank = land.edhrec_rank or 99999
-
-        if name_lower == "command tower":
-            return (0, 0)
-        if "fetch" in _land_category(land):
-            return (1, rank)
-        if _produces_multiple_colors(land, identity):
-            return (2, rank)
-        return (3, rank)
+        return (_land_priority_tier(land, identity), rank)
 
     return sorted(lands, key=priority_key)
 

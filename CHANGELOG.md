@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.0] - 2026-05-29
+
+### Added
+- **Deck variety** (`--variety 0.0-1.0`, `--seed`) — builds are no longer near-identical on every run. Variety replaces strict top-N selection with seeded, score-weighted sampling across card picks, the mana base, and (in AI mode) shuffled candidate ordering. `--seed` makes any variety build reproducible; passing `--seed` alone implies a moderate variety level. Default (no flags) output is unchanged and deterministic.
+- **Theme steering** (`--theme`) — lean a build into an archetype (`aristocrats`, `tokens`, `spellslinger`, `lifegain`, `counters`, `graveyard`, `reanimator`, `blink`, `voltron`, `landfall`, `control`) so the same commander can produce genuinely different decks instead of always the same staples/combo.
+- **LLM anti-repetition** — in variety mode, prior saved decks for the same commander are fed to Claude with an instruction to build something meaningfully different.
+
+### Changed
+- In variety mode, scoring emphasizes commander synergy and de-emphasizes raw EDHREC rank, reducing the "same good-stuff pile regardless of commander" effect.
+
 ## [0.4.0] - 2026-05-29
 
 ### Added
