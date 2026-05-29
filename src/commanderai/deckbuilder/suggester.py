@@ -1,3 +1,4 @@
+import random
 import re
 
 import anthropic
@@ -6,6 +7,14 @@ from commanderai.config import ANTHROPIC_API_KEY, LLM_MODEL
 from commanderai.models import Card, DeckSlot
 from commanderai.deckbuilder.rules import color_identity_filter
 from commanderai.deckbuilder.slots import classify_card
+from commanderai.deckbuilder.themes import theme_hits
+from commanderai.deckbuilder.variety import softmax_weights, weighted_sample_without_replacement
+
+_THEME_BONUS_PER_HIT = 20.0
+_THEME_BONUS_CAP = 60.0
+# When sampling for variety, draw from this many times top_n of the best matches
+# so picks stay strong but aren't always the identical top-N.
+_VARIETY_POOL_MULTIPLIER = 4
 
 
 def _extract_themes(commander: Card) -> list[str]:
@@ -152,10 +161,17 @@ def find_suggestions_heuristic(
     all_cards: list[Card],
     owned_names: set[str],
     top_n: int = 20,
+    rng: random.Random | None = None,
+    variety: float = 0.0,
+    theme: str | None = None,
 ) -> list[tuple[Card, list[str]]]:
-    """Find high-synergy cards NOT in collection using theme matching."""
+    """Find high-synergy cards NOT in collection using theme matching.
+
+    ``variety``/``rng`` and ``theme`` are opt-in: with the defaults the result
+    is the deterministic top-N exactly as before.
+    """
     themes = _extract_themes(commander)
-    if not themes:
+    if not themes and not theme:
         return []
 
     legal_pool = color_identity_filter(all_cards, commander)
@@ -172,12 +188,20 @@ def find_suggestions_heuristic(
         full_text = text + " " + type_line
 
         hits: list[str] = []
-        for theme in themes:
-            patterns = _THEME_PATTERNS.get(theme, [])
+        for t in themes:
+            patterns = _THEME_PATTERNS.get(t, [])
             for pattern in patterns:
                 if re.search(pattern, full_text, re.IGNORECASE):
-                    hits.append(theme)
+                    hits.append(t)
                     break
+
+        theme_bonus = 0.0
+        if theme:
+            th = theme_hits(theme, card.oracle_text)
+            if th > 0:
+                theme_bonus = min(th * _THEME_BONUS_PER_HIT, _THEME_BONUS_CAP)
+                if theme not in hits:
+                    hits.append(theme)
 
         if not hits:
             continue
@@ -187,6 +211,7 @@ def find_suggestions_heuristic(
             score += max(0, 100 - (card.edhrec_rank / 300))
         if card.cmc <= 3:
             score += 5
+        score += theme_bonus
 
         # Bonus for cards that directly enable commander's core mechanic
         score += _direct_synergy_bonus(card, commander, full_text)
@@ -194,6 +219,13 @@ def find_suggestions_heuristic(
         scored.append((card, score, hits))
 
     scored.sort(key=lambda x: x[1], reverse=True)
+
+    if variety > 0 and rng is not None and len(scored) > top_n:
+        pool = scored[: max(top_n * _VARIETY_POOL_MULTIPLIER, top_n)]
+        weights = softmax_weights([s for _, s, _ in pool], variety)
+        sampled = weighted_sample_without_replacement(rng, pool, weights, top_n)
+        sampled.sort(key=lambda x: x[1], reverse=True)
+        return [(card, hits) for card, _, hits in sampled]
 
     return [(card, hits) for card, _, hits in scored[:top_n]]
 
@@ -204,6 +236,9 @@ def find_suggestions_llm(
     owned_names: set[str],
     all_cards: list[Card],
     top_n: int = 15,
+    rng: random.Random | None = None,
+    variety: float = 0.0,
+    theme: str | None = None,
 ) -> str:
     """Use LLM to suggest upgrades with reasoning."""
     if not ANTHROPIC_API_KEY:
@@ -212,7 +247,13 @@ def find_suggestions_llm(
     themes = _extract_themes(commander)
 
     # Get top heuristic suggestions to give LLM context on what's available
-    heuristic_picks = find_suggestions_heuristic(commander, all_cards, owned_names, top_n=40)
+    heuristic_picks = find_suggestions_heuristic(
+        commander, all_cards, owned_names, top_n=40,
+        rng=rng, variety=variety, theme=theme,
+    )
+    if variety > 0 and rng is not None:
+        heuristic_picks = heuristic_picks[:]
+        rng.shuffle(heuristic_picks)
 
     lines = []
     lines.append("## Commander")
@@ -240,6 +281,13 @@ def find_suggestions_llm(
     lines.append("For each card explain in 1 sentence WHY it's great with this commander.")
     lines.append("Sort by impact — most impactful first.")
     lines.append("Include approximate price if known.")
+    if theme:
+        lines.append(f"Lean the suggestions toward a '{theme}' strategy.")
+    if variety > 0:
+        lines.append(
+            "Offer a fresh, varied mix — don't just list the most obvious staples; "
+            "include some less common but genuinely synergistic options."
+        )
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     message = client.messages.create(

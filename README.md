@@ -55,9 +55,43 @@ commanderai build \
   --lands 35 \                   # Adjust land count
   --budget 50 \                  # Max deck price (USD)
   --bracket 2 \                  # Power bracket 1-5 (see below)
+  --variety 0.6 \                # 0=deterministic, higher=more variation between builds
+  --seed 42 \                    # Reproducible variety (implies --variety if unset)
+  --theme aristocrats \          # Lean into an archetype (see below)
   -f archidekt \                 # Export format: text/mtgo/moxfield/archidekt
   -o decks/my_deck.txt \         # Output path (default: decks/<commander>.txt)
   -v                             # Verbose — show why each card was picked
+```
+
+## Deck Variety
+
+By default, builds are deterministic — the same collection + commander always produces the same deck. Use `--variety` / `--seed` / `--theme` when you want different, fresh decks instead of the same staples every time.
+
+```bash
+# Different deck each run (random seed printed so you can reproduce it)
+commanderai build -c data/my_collection.txt -C "Atraxa, Praetors' Voice" --variety 0.6
+
+# Reproduce a specific build
+commanderai build -c data/my_collection.txt -C "Atraxa, Praetors' Voice" --variety 0.6 --seed 12345
+
+# Steer the deck toward an archetype
+commanderai build -c data/my_collection.txt -C "Y'shtola, Night's Blessed" --theme aristocrats
+```
+
+- `--variety 0.0` (default): deterministic top-picks, unchanged behavior.
+- `--variety` up to `1.0`: score-weighted random sampling across card picks and the mana base, so re-runs differ while staying powerful. Also emphasizes commander synergy over raw EDHREC rank.
+- `--seed N`: reproducible variety. Passing `--seed` alone turns on a moderate variety level.
+- `--theme`: `aristocrats`, `tokens`, `spellslinger`, `lifegain`, `counters`, `graveyard`, `reanimator`, `blink`, `voltron`, `landfall`, `control`. Theme steering is deterministic on its own and composes with `--variety`.
+- In AI mode, variety also shuffles the candidate ordering and feeds prior saved decks to Claude with a "build something different" instruction.
+
+`--variety` / `--seed` also work on `suggest-commanders` and `suggest` (surface different picks each run), and `suggest` accepts `--theme` too:
+
+```bash
+# Different commander ideas each run
+commanderai suggest-commanders -c data/my_collection.txt --variety 0.7
+
+# Themed, varied upgrade suggestions
+commanderai suggest -c data/my_collection.txt -C "Y'shtola, Night's Blessed" --theme aristocrats --variety 0.6
 ```
 
 ## Power Brackets

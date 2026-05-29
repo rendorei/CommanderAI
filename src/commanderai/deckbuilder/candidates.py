@@ -1,12 +1,19 @@
+import random
+
 from commanderai.config import CANDIDATES_PER_SLOT_MULTIPLIER, MAX_TOTAL_CANDIDATES, SLOT_QUOTAS
 from commanderai.models import Card, DeckSlot, ScoredCard
 from commanderai.deckbuilder.rules import color_identity_filter
 from commanderai.deckbuilder.scoring import score_card
 from commanderai.deckbuilder.slots import classify_card
+from commanderai.deckbuilder.variety import softmax_weights, weighted_sample_without_replacement
 
 
 def build_candidates(
-    collection_cards: list[Card], commander: Card
+    collection_cards: list[Card],
+    commander: Card,
+    theme: str | None = None,
+    synergy_emphasis: float = 1.0,
+    rank_emphasis: float = 1.0,
 ) -> dict[DeckSlot, list[ScoredCard]]:
     legal_cards = color_identity_filter(collection_cards, commander)
     legal_cards = [c for c in legal_cards if c.name != commander.name]
@@ -15,7 +22,10 @@ def build_candidates(
 
     for card in legal_cards:
         slot = classify_card(card)
-        scored = score_card(card, commander, slot)
+        scored = score_card(
+            card, commander, slot,
+            theme=theme, synergy_emphasis=synergy_emphasis, rank_emphasis=rank_emphasis,
+        )
         by_slot[slot].append(scored)
 
     for slot in by_slot:
@@ -47,8 +57,26 @@ def _trim_candidates(
     return trimmed
 
 
+def _select_from_slot(
+    available: list[ScoredCard],
+    quota: int,
+    rng: random.Random | None,
+    variety: float,
+) -> list[ScoredCard]:
+    """Top-N when deterministic; score-weighted sample when variety > 0."""
+    if variety <= 0 or rng is None or len(available) <= quota:
+        return available[:quota]
+    weights = softmax_weights([sc.score for sc in available], variety)
+    sampled = weighted_sample_without_replacement(rng, available, weights, quota)
+    sampled.sort(key=lambda s: s.score, reverse=True)
+    return sampled
+
+
 def heuristic_pick(
-    candidates: dict[DeckSlot, list[ScoredCard]], land_count: int = 37
+    candidates: dict[DeckSlot, list[ScoredCard]],
+    land_count: int = 37,
+    rng: random.Random | None = None,
+    variety: float = 0.0,
 ) -> dict[DeckSlot, list[ScoredCard]]:
     picks: dict[DeckSlot, list[ScoredCard]] = {}
 
@@ -57,7 +85,7 @@ def heuristic_pick(
             continue
         quota = SLOT_QUOTAS.get(slot.value, 10)
         available = candidates.get(slot, [])
-        picks[slot] = available[:quota]
+        picks[slot] = _select_from_slot(available, quota, rng, variety)
 
     total_nonland = sum(len(v) for v in picks.values())
     target_nonland = 99 - land_count
@@ -73,7 +101,11 @@ def heuristic_pick(
                 if s.card.name not in picked_names:
                     all_remaining.append(s)
         all_remaining.sort(key=lambda s: s.score, reverse=True)
-        extra = all_remaining[:deficit]
+        if variety > 0 and rng is not None and len(all_remaining) > deficit:
+            weights = softmax_weights([s.score for s in all_remaining], variety)
+            extra = weighted_sample_without_replacement(rng, all_remaining, weights, deficit)
+        else:
+            extra = all_remaining[:deficit]
         for s in extra:
             picks.setdefault(s.slot, []).append(s)
 

@@ -20,6 +20,13 @@ from commanderai.deckbuilder.llm_picker import llm_build
 from commanderai.deckbuilder.mana_base import build_mana_base
 from commanderai.deckbuilder.rules import is_legal_commander, validate_deck
 from commanderai.deckbuilder.slots import classify_card
+from commanderai.deckbuilder.themes import THEMES, theme_names
+from commanderai.deckbuilder.variety import (
+    make_rng,
+    resolve_seed,
+    softmax_weights,
+    weighted_sample_without_replacement,
+)
 from commanderai.models import Deck, DeckPick, DeckSlot, ScoredCard
 from commanderai.output.export import export_deck
 from commanderai.output.formatter import format_deck
@@ -39,12 +46,88 @@ def _load_index() -> CardIndex:
     return CardIndex(cards, non_legal_names=non_legal)
 
 
+def _setup_variety(variety: float, seed: Optional[int]) -> tuple[float, "random.Random | None"]:
+    """Resolve variety + RNG. Passing --seed alone implies moderate variety.
+
+    Prints the seed used so any variety run can be reproduced. Returns
+    (effective_variety, rng) where rng is None when fully deterministic.
+    """
+    import random
+
+    effective = variety
+    if seed is not None and variety == 0.0:
+        effective = 0.5
+    if effective <= 0:
+        return 0.0, None
+    resolved = resolve_seed(seed)
+    console.print(
+        f"[dim]Variety {effective:.2f} (seed {resolved} — reuse with --seed {resolved})[/dim]"
+    )
+    return effective, make_rng(resolved)
+
+
+_BASIC_LANDS = {"Plains", "Island", "Swamp", "Mountain", "Forest", "Wastes"}
+
+
+def _safe_deck_name(commander_name: str) -> str:
+    return re.sub(r"[^\w\-]", "_", commander_name.split("//")[0].strip()).lower().strip("_")
+
+
+def _load_prior_decks(commander_name: str) -> list[list[str]]:
+    """Best-effort parse of previously-saved decks for this commander.
+
+    Returns a list of non-land card-name lists, used to nudge the LLM toward a
+    different build. Handles both the simple/archidekt export and the grouped
+    text format (stripping slot tags, mana costs, and verbose reasons).
+    """
+    safe = _safe_deck_name(commander_name)
+    if not DECKS_DIR.exists():
+        return []
+
+    decks: list[list[str]] = []
+    for path in sorted(DECKS_DIR.glob(f"{safe}*.txt")):
+        names: list[str] = []
+        for raw in path.read_text().splitlines():
+            line = raw.strip()
+            m = re.match(r"^\d+x?\s+(.+)$", line)
+            if not m:
+                continue
+            rest = m.group(1).strip()
+
+            tag = None
+            tag_match = re.search(r"\s*\[([^\]]+)\]\s*$", rest)
+            if tag_match:
+                tag = tag_match.group(1)
+                rest = rest[: tag_match.start()].strip()
+            if tag in ("Land", "Commander"):
+                continue
+
+            rest = rest.replace("*CMDR*", "").strip()
+            rest = re.split(r"\s+(?:\{|//)", rest, maxsplit=1)[0].strip()
+            if not rest or rest in _BASIC_LANDS:
+                continue
+            names.append(rest)
+        if names:
+            decks.append(names)
+    return decks
+
+
 @app.command()
 def build(
     collection: Path = typer.Option(..., "--collection", "-c", help="Path to collection file"),
     commander_name: str = typer.Option(..., "--commander", "-C", help="Commander card name"),
     no_llm: bool = typer.Option(False, "--no-llm", help="Skip LLM, use heuristic only"),
     lands: int = typer.Option(DEFAULT_LAND_COUNT, "--lands", help="Number of lands"),
+    variety: float = typer.Option(
+        0.0, "--variety", min=0.0, max=1.0,
+        help="Deck variety 0.0-1.0 (0=deterministic; higher = more variation between builds)",
+    ),
+    seed: Optional[int] = typer.Option(
+        None, "--seed", help="Random seed for reproducible variety (implies --variety if unset)"
+    ),
+    theme: Optional[str] = typer.Option(
+        None, "--theme", help="Archetype to lean into (e.g. aristocrats, tokens, spellslinger)"
+    ),
     budget: Optional[float] = typer.Option(None, "--budget", help="Max deck price in USD"),
     bracket: Optional[int] = typer.Option(None, "--bracket", "-b", min=1, max=5, help="Power bracket 1-5 (1=casual, 5=cEDH)"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Write deck to file"),
@@ -52,6 +135,17 @@ def build(
     format: str = typer.Option("text", "--format", "-f", help="Output format"),
 ):
     """Build a Commander deck from your collection."""
+    if theme and theme.lower() not in THEMES:
+        console.print(
+            f"[red]Unknown theme '{theme}'. Available: {', '.join(theme_names())}[/red]"
+        )
+        raise typer.Exit(1)
+    theme = theme.lower() if theme else None
+
+    effective_variety, rng = _setup_variety(variety, seed)
+    synergy_emphasis = 1.0 + effective_variety if effective_variety > 0 else 1.0
+    rank_emphasis = 1.0 - 0.4 * effective_variety if effective_variety > 0 else 1.0
+
     index = _load_index()
 
     entries = parse_collection(collection)
@@ -104,7 +198,13 @@ def build(
         SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console
     ) as progress:
         progress.add_task("Analyzing candidates...", total=None)
-        candidates = build_candidates(collection_cards, commander)
+        candidates = build_candidates(
+            collection_cards, commander,
+            theme=theme, synergy_emphasis=synergy_emphasis, rank_emphasis=rank_emphasis,
+        )
+
+    if theme:
+        console.print(f"[dim]Theme: leaning into '{theme}'[/dim]")
 
     total_candidates = sum(len(v) for v in candidates.values() if v)
     console.print(f"[dim]Found {total_candidates} candidate cards across all slots[/dim]")
@@ -198,7 +298,7 @@ def build(
 
     if no_llm:
         console.print("[dim]Using heuristic selection (--no-llm)[/dim]")
-        picked = heuristic_pick(candidates, lands)
+        picked = heuristic_pick(candidates, lands, rng=rng, variety=effective_variety)
         deck_picks = []
         for slot, scored_list in picked.items():
             for sc in scored_list:
@@ -206,6 +306,11 @@ def build(
         strategy = ""
         upgrades = []
     else:
+        prior_decks = _load_prior_decks(commander.name) if effective_variety > 0 else None
+        if prior_decks:
+            console.print(
+                f"[dim]Found {len(prior_decks)} prior deck(s) — asking Claude to differ[/dim]"
+            )
         with Progress(
             SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console
         ) as progress:
@@ -214,10 +319,11 @@ def build(
                 deck_picks, strategy, upgrades = llm_build(
                     commander, candidates, lands,
                     extra_instructions=extra_instructions, owned_names=owned_names,
+                    rng=rng, variety=effective_variety, prior_decks=prior_decks,
                 )
             except Exception as e:
                 console.print(f"[yellow]LLM failed ({e}), falling back to heuristic[/yellow]")
-                picked = heuristic_pick(candidates, lands)
+                picked = heuristic_pick(candidates, lands, rng=rng, variety=effective_variety)
                 deck_picks = []
                 for slot, scored_list in picked.items():
                     for sc in scored_list:
@@ -232,7 +338,7 @@ def build(
     if len(deck_picks) < target_nonland:
         deficit = target_nonland - len(deck_picks)
         picked_names = {p.card.name for p in deck_picks}
-        fallback = heuristic_pick(candidates, lands)
+        fallback = heuristic_pick(candidates, lands, rng=rng, variety=effective_variety)
         backfill: list[DeckPick] = []
         for slot, scored_list in fallback.items():
             for sc in scored_list:
@@ -311,7 +417,8 @@ def build(
         excluded_set = {name for name, _ in bracket_result.excluded_cards}
         land_cards = [c for c in land_cards if c.name not in excluded_set]
     land_picks = build_mana_base(
-        [p.card for p in deck_picks], land_cards, commander, lands
+        [p.card for p in deck_picks], land_cards, commander, lands,
+        rng=rng, variety=effective_variety,
     )
 
     all_picks = deck_picks + land_picks
@@ -347,7 +454,7 @@ def build(
 
     if not output:
         DECKS_DIR.mkdir(parents=True, exist_ok=True)
-        safe_name = re.sub(r"[^\w\-]", "_", commander.name.split("//")[0].strip()).lower().strip("_")
+        safe_name = _safe_deck_name(commander.name)
         ext = "txt"
         output = DECKS_DIR / f"{safe_name}.{ext}"
         # Avoid overwriting — append number
@@ -367,8 +474,16 @@ def suggest_commanders(
     collection: Path = typer.Option(..., "--collection", "-c", help="Path to collection file"),
     colors: Optional[str] = typer.Option(None, "--colors", help="Filter by color identity (e.g. WUB)"),
     top: int = typer.Option(5, "--top", help="Number of suggestions"),
+    variety: float = typer.Option(
+        0.0, "--variety", min=0.0, max=1.0,
+        help="Surface different commanders each run (0=deterministic top picks)",
+    ),
+    seed: Optional[int] = typer.Option(
+        None, "--seed", help="Random seed for reproducible variety (implies --variety if unset)"
+    ),
 ):
     """Suggest commanders from your collection."""
+    effective_variety, rng = _setup_variety(variety, seed)
     index = _load_index()
 
     entries = parse_collection(collection)
@@ -386,7 +501,7 @@ def suggest_commanders(
             if set(c.color_identity) == color_filter or set(c.color_identity).issubset(color_filter)
         ]
 
-    scored_commanders: list[tuple[str, int, int]] = []
+    scored_commanders: list[tuple[str, int, int, float]] = []
     for cmdr in owned_commanders:
         support_cards = [
             c for c in collection_cards
@@ -394,12 +509,22 @@ def suggest_commanders(
             and c.name != cmdr.name
         ]
         rank = cmdr.edhrec_rank or 99999
-        scored_commanders.append((cmdr.name, len(support_cards), rank))
+        support = len(support_cards)
+        weight_score = support + max(0.0, 100 - rank / 300)
+        scored_commanders.append((cmdr.name, support, rank, weight_score))
 
     scored_commanders.sort(key=lambda x: (-x[1], x[2]))
 
+    if effective_variety > 0 and rng is not None and len(scored_commanders) > top:
+        pool = scored_commanders[: max(top * 4, top)]
+        weights = softmax_weights([x[3] for x in pool], effective_variety)
+        chosen = weighted_sample_without_replacement(rng, pool, weights, top)
+        chosen.sort(key=lambda x: (-x[1], x[2]))
+    else:
+        chosen = scored_commanders[:top]
+
     console.print(f"\n[bold]Top {top} Commander Suggestions:[/bold]\n")
-    for i, (name, support, rank) in enumerate(scored_commanders[:top], 1):
+    for i, (name, support, rank, _) in enumerate(chosen, 1):
         card = index.get(name)
         identity = "".join(card.color_identity) if card else "?"
         console.print(
@@ -488,10 +613,28 @@ def suggest(
     deck_file: Optional[Path] = typer.Option(None, "--deck", "-d", help="Current deck file (for targeted suggestions)"),
     top: int = typer.Option(15, "--top", help="Number of suggestions"),
     no_llm: bool = typer.Option(False, "--no-llm", help="Skip LLM, use heuristic only"),
+    variety: float = typer.Option(
+        0.0, "--variety", min=0.0, max=1.0,
+        help="Vary suggestions each run (0=deterministic top picks)",
+    ),
+    seed: Optional[int] = typer.Option(
+        None, "--seed", help="Random seed for reproducible variety (implies --variety if unset)"
+    ),
+    theme: Optional[str] = typer.Option(
+        None, "--theme", help="Bias suggestions toward an archetype (e.g. aristocrats, tokens)"
+    ),
 ):
     """Suggest cards to BUY that synergize with your commander."""
     from commanderai.deckbuilder.suggester import find_suggestions_heuristic, find_suggestions_llm
 
+    if theme and theme.lower() not in THEMES:
+        console.print(
+            f"[red]Unknown theme '{theme}'. Available: {', '.join(theme_names())}[/red]"
+        )
+        raise typer.Exit(1)
+    theme = theme.lower() if theme else None
+
+    effective_variety, rng = _setup_variety(variety, seed)
     index = _load_index()
 
     entries = parse_collection(collection)
@@ -514,7 +657,8 @@ def suggest(
 
     if no_llm:
         suggestions = find_suggestions_heuristic(
-            commander, index.all_cards, owned_names, top_n=top
+            commander, index.all_cards, owned_names, top_n=top,
+            rng=rng, variety=effective_variety, theme=theme,
         )
         if not suggestions:
             console.print("[yellow]No synergy suggestions found.[/yellow]")
@@ -538,7 +682,8 @@ def suggest(
             progress.add_task("Asking Claude for upgrade suggestions...", total=None)
             try:
                 result = find_suggestions_llm(
-                    commander, deck_cards or [], owned_names, index.all_cards, top_n=top
+                    commander, deck_cards or [], owned_names, index.all_cards, top_n=top,
+                    rng=rng, variety=effective_variety, theme=theme,
                 )
             except Exception as e:
                 console.print(f"[red]Error: {e}[/red]")

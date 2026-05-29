@@ -1,4 +1,5 @@
 import json
+import random
 
 import anthropic
 
@@ -18,6 +19,9 @@ def build_prompt(
     land_count: int = _LAND_COUNT_DEFAULT,
     extra_instructions: str = "",
     owned_names: set[str] | None = None,
+    rng: random.Random | None = None,
+    variety: float = 0.0,
+    prior_decks: list[list[str]] | None = None,
 ) -> str:
     nonland_slots = 99 - land_count
     lines = []
@@ -38,6 +42,11 @@ def build_prompt(
         slot_candidates = candidates.get(slot, [])
         if not slot_candidates:
             continue
+        # Shuffle candidate order in variety mode to reduce positional anchoring
+        # that otherwise makes the model converge on the same top picks.
+        if variety > 0 and rng is not None:
+            slot_candidates = slot_candidates[:]
+            rng.shuffle(slot_candidates)
         lines.append(f"### {slot.value} (pick ~{quota})")
         for i, sc in enumerate(slot_candidates, 1):
             card = sc.card
@@ -49,9 +58,27 @@ def build_prompt(
             )
         lines.append("")
 
+    if variety > 0 and prior_decks:
+        lines.append("## Previously Built Decks (avoid repeating)")
+        lines.append(
+            f"You have already built {len(prior_decks)} deck(s) for this commander. "
+            f"Build something meaningfully DIFFERENT this time — vary roughly "
+            f"{int(30 + 40 * min(variety, 1.0))}% of the non-land cards while keeping the "
+            f"deck powerful and synergistic. Explore a different angle or sub-theme."
+        )
+        for idx, deck in enumerate(prior_decks[-3:], 1):
+            sample = ", ".join(deck[:40])
+            lines.append(f"- Build {idx}: {sample}")
+        lines.append("")
+
     lines.append("## Instructions")
     if extra_instructions:
         lines.append(f"- **{extra_instructions}**")
+    if variety > 0:
+        lines.append(
+            "- Favor synergistic, on-theme cards and don't just default to the most "
+            "generic staples; surprise me with reasonable inclusions."
+        )
     lines.append(f"- Select exactly {nonland_slots} cards total across all slots")
     lines.append("- Respect approximate quotas per slot (±2 is fine for synergy reasons)")
     lines.append("- Prioritize synergy with the commander's strategy")
@@ -81,13 +108,19 @@ def call_llm(
     land_count: int = _LAND_COUNT_DEFAULT,
     extra_instructions: str = "",
     owned_names: set[str] | None = None,
+    rng: random.Random | None = None,
+    variety: float = 0.0,
+    prior_decks: list[list[str]] | None = None,
 ) -> dict:
     if not ANTHROPIC_API_KEY:
         raise RuntimeError(
             "ANTHROPIC_API_KEY not set. Use --no-llm flag or set the environment variable."
         )
 
-    prompt = build_prompt(commander, candidates, land_count, extra_instructions, owned_names)
+    prompt = build_prompt(
+        commander, candidates, land_count, extra_instructions, owned_names,
+        rng=rng, variety=variety, prior_decks=prior_decks,
+    )
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     message = client.messages.create(
@@ -144,6 +177,12 @@ def llm_build(
     land_count: int = _LAND_COUNT_DEFAULT,
     extra_instructions: str = "",
     owned_names: set[str] | None = None,
+    rng: random.Random | None = None,
+    variety: float = 0.0,
+    prior_decks: list[list[str]] | None = None,
 ) -> tuple[list[DeckPick], str, list[str]]:
-    response = call_llm(commander, candidates, land_count, extra_instructions, owned_names)
+    response = call_llm(
+        commander, candidates, land_count, extra_instructions, owned_names,
+        rng=rng, variety=variety, prior_decks=prior_decks,
+    )
     return parse_llm_response(response, candidates, owned_names)
