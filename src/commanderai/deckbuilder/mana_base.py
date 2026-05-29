@@ -46,9 +46,13 @@ def build_mana_base(
     land_count: int = 37,
     rng: random.Random | None = None,
     variety: float = 0.0,
+    partner: Card | None = None,
 ) -> list[DeckPick]:
-    pips = count_pips(nonland_cards + [commander])
-    identity = set(commander.color_identity)
+    commanders = [commander] + ([partner] if partner else [])
+    pips = count_pips(nonland_cards + commanders)
+    identity: set[str] = set()
+    for c in commanders:
+        identity |= set(c.color_identity)
 
     # Filter lands to commander's color identity (colorless lands always legal)
     legal_lands = [

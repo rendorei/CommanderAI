@@ -1,4 +1,5 @@
 import re
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 
@@ -20,7 +21,19 @@ from commanderai.deckbuilder.llm_picker import llm_build
 from commanderai.deckbuilder.mana_base import build_mana_base
 from commanderai.deckbuilder.rules import is_legal_commander, validate_deck
 from commanderai.deckbuilder.slots import classify_card
-from commanderai.deckbuilder.themes import THEMES, theme_names
+from commanderai.deckbuilder.colors import COLOR_NAMES, color_name, resolve_colors
+from commanderai.deckbuilder.partner import (
+    can_partner,
+    combined_identity,
+    partner_ability,
+)
+from commanderai.deckbuilder.themes import (
+    ALIASES,
+    TRIBES,
+    archetype_names,
+    resolve_theme,
+    theme_hits,
+)
 from commanderai.deckbuilder.variety import (
     make_rng,
     resolve_seed,
@@ -44,6 +57,125 @@ def _load_index() -> CardIndex:
         non_legal = load_non_legal_names()
     console.print(f"[dim]Loaded {len(cards)} Commander-legal cards[/dim]")
     return CardIndex(cards, non_legal_names=non_legal)
+
+
+def _resolve_theme_or_exit(theme: Optional[str]) -> Optional[str]:
+    if not theme:
+        return None
+    canonical = resolve_theme(theme)
+    if canonical is None:
+        console.print(
+            f"[red]Unknown theme '{theme}'.[/red]\n"
+            f"[dim]Archetypes: {', '.join(archetype_names())}[/dim]\n"
+            f"[dim]Also accepts tribes (elf, goblin, dragon, sliver...) and aliases "
+            f"(go-wide, storm, bogles, tron, death-and-taxes...).[/dim]"
+        )
+        raise typer.Exit(1)
+    return canonical
+
+
+def _resolve_colors_or_exit(colors: Optional[str]) -> "set[str] | None":
+    if not colors:
+        return None
+    resolved = resolve_colors(colors)
+    if resolved is None:
+        console.print(
+            f"[red]Unknown colors '{colors}'. Use WUBRG letters (e.g. WUB) or a "
+            f"combination name (e.g. esper, jund, azorius, five-color).[/red]"
+        )
+        raise typer.Exit(1)
+    return resolved
+
+
+def _auto_select_commander(
+    collection_cards: "list",
+    theme: Optional[str],
+    color_filter: "set[str] | None",
+    rng: "random.Random | None",
+    variety: float,
+) -> "tuple | None":
+    """Pick the best-fit owned commander for a theme/colors when none is given.
+
+    Scores each legal commander you own by on-theme card support in its colors,
+    its own theme fit, and EDHREC rank. Returns (commander, on_theme_support,
+    theme_fit) or None if no eligible commander exists.
+    """
+    legal = [c for c in collection_cards if is_legal_commander(c)]
+    if color_filter is not None:
+        legal = [c for c in legal if set(c.color_identity).issubset(color_filter)]
+    if not legal:
+        return None
+
+    # Precompute which owned cards are on-theme (for support counting).
+    if theme:
+        on_theme = [
+            c for c in collection_cards
+            if theme_hits(theme, c.oracle_text, c.type_line) > 0
+        ]
+    else:
+        on_theme = collection_cards
+
+    scored: list[tuple] = []
+    for cmdr in legal:
+        identity = set(cmdr.color_identity)
+        support = sum(
+            1 for c in on_theme
+            if c.name != cmdr.name and set(c.color_identity).issubset(identity)
+        )
+        fit = theme_hits(theme, cmdr.oracle_text, cmdr.type_line) if theme else 0
+        rank_bonus = max(0.0, 100 - (cmdr.edhrec_rank or 99999) / 300)
+        weight = fit * 60 + support + rank_bonus
+        scored.append((cmdr, support, fit, weight))
+
+    scored.sort(key=lambda x: x[3], reverse=True)
+
+    if variety > 0 and rng is not None and len(scored) > 1:
+        pool = scored[: max(8, 1)]
+        weights = softmax_weights([x[3] for x in pool], variety)
+        chosen = weighted_sample_without_replacement(rng, pool, weights, 1)[0]
+    else:
+        chosen = scored[0]
+    return chosen[0], chosen[1], chosen[2]
+
+
+def _auto_select_partner(
+    commander,
+    collection_cards: "list",
+    theme: Optional[str],
+    color_filter: "set[str] | None",
+    rng: "random.Random | None",
+    variety: float,
+):
+    """Find the best owned partner for a commander that wants one, or None."""
+    if not partner_ability(commander).can_take_partner:
+        return None
+
+    primary_colors = set(commander.color_identity)
+    eligible = []
+    for c in collection_cards:
+        if c.name == commander.name or not can_partner(commander, c):
+            continue
+        union = primary_colors | set(c.color_identity)
+        if color_filter is not None and not union.issubset(color_filter):
+            continue
+        eligible.append(c)
+    if not eligible:
+        return None
+
+    scored = []
+    for c in eligible:
+        fit = theme_hits(theme, c.oracle_text, c.type_line) if theme else 0
+        new_colors = len(set(c.color_identity) - primary_colors)
+        rank_bonus = max(0.0, 100 - (c.edhrec_rank or 99999) / 300)
+        weight = fit * 50 + new_colors * 15 + rank_bonus
+        scored.append((c, weight))
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    if variety > 0 and rng is not None and len(scored) > 1:
+        pool = scored[:8]
+        weights = softmax_weights([w for _, w in pool], variety)
+        return weighted_sample_without_replacement(rng, pool, weights, 1)[0][0]
+    return scored[0][0]
 
 
 def _setup_variety(variety: float, seed: Optional[int]) -> tuple[float, "random.Random | None"]:
@@ -115,7 +247,14 @@ def _load_prior_decks(commander_name: str) -> list[list[str]]:
 @app.command()
 def build(
     collection: Path = typer.Option(..., "--collection", "-c", help="Path to collection file"),
-    commander_name: str = typer.Option(..., "--commander", "-C", help="Commander card name"),
+    commander_name: Optional[str] = typer.Option(
+        None, "--commander", "-C",
+        help="Commander card name (omit to auto-pick from --theme/--colors)",
+    ),
+    partner_name: Optional[str] = typer.Option(
+        None, "--partner", "-P",
+        help="Second commander (Partner / Background / Doctor's companion etc.)",
+    ),
     no_llm: bool = typer.Option(False, "--no-llm", help="Skip LLM, use heuristic only"),
     lands: int = typer.Option(DEFAULT_LAND_COUNT, "--lands", help="Number of lands"),
     variety: float = typer.Option(
@@ -126,7 +265,11 @@ def build(
         None, "--seed", help="Random seed for reproducible variety (implies --variety if unset)"
     ),
     theme: Optional[str] = typer.Option(
-        None, "--theme", help="Archetype to lean into (e.g. aristocrats, tokens, spellslinger)"
+        None, "--theme", help="Archetype to lean into (e.g. aristocrats, tokens, dragons)"
+    ),
+    colors: Optional[str] = typer.Option(
+        None, "--colors",
+        help="Color filter for auto-pick: WUBRG letters or a name (esper, jund, azorius)",
     ),
     budget: Optional[float] = typer.Option(None, "--budget", help="Max deck price in USD"),
     bracket: Optional[int] = typer.Option(None, "--bracket", "-b", min=1, max=5, help="Power bracket 1-5 (1=casual, 5=cEDH)"),
@@ -134,13 +277,23 @@ def build(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show scoring details"),
     format: str = typer.Option("text", "--format", "-f", help="Output format"),
 ):
-    """Build a Commander deck from your collection."""
-    if theme and theme.lower() not in THEMES:
+    """Build a Commander deck from your collection.
+
+    Provide --commander, or omit it and pass --theme and/or --colors to
+    auto-pick the best-fit commander you own.
+    """
+    theme = _resolve_theme_or_exit(theme)
+    color_filter = _resolve_colors_or_exit(colors)
+
+    if not commander_name and not theme and color_filter is None:
         console.print(
-            f"[red]Unknown theme '{theme}'. Available: {', '.join(theme_names())}[/red]"
+            "[red]Specify --commander, or --theme/--colors to auto-pick a commander.[/red]"
         )
         raise typer.Exit(1)
-    theme = theme.lower() if theme else None
+
+    if partner_name and not commander_name:
+        console.print("[red]--partner requires --commander.[/red]")
+        raise typer.Exit(1)
 
     effective_variety, rng = _setup_variety(variety, seed)
     synergy_emphasis = 1.0 + effective_variety if effective_variety > 0 else 1.0
@@ -171,18 +324,6 @@ def build(
         for name in match_result.unmatched[:10]:
             console.print(f"  [red]✗[/red] '{name}' not found")
 
-    commander = index.get(commander_name)
-    if not commander:
-        console.print(f"[red]Commander '{commander_name}' not found[/red]")
-        raise typer.Exit(1)
-
-    if not is_legal_commander(commander):
-        console.print(f"[red]'{commander.name}' is not a legal commander[/red]")
-        raise typer.Exit(1)
-
-    console.print(f"\n[bold]Commander:[/bold] {commander.name} — {commander.type_line}")
-    console.print(f"[dim]{commander.oracle_text}[/dim]\n")
-
     collection_cards = get_unique_cards(match_result.matched)
     owned_names = {c.name for c in collection_cards}
     owned_names_lower = {n.lower() for n in owned_names}
@@ -194,6 +335,90 @@ def build(
         )
         raise typer.Exit(1)
 
+    if commander_name:
+        commander = index.get(commander_name)
+        if not commander:
+            console.print(f"[red]Commander '{commander_name}' not found[/red]")
+            raise typer.Exit(1)
+        if not is_legal_commander(commander):
+            console.print(f"[red]'{commander.name}' is not a legal commander[/red]")
+            raise typer.Exit(1)
+    else:
+        picked = _auto_select_commander(
+            collection_cards, theme, color_filter, rng, effective_variety
+        )
+        if not picked:
+            criteria = []
+            if theme:
+                criteria.append(f"theme '{theme}'")
+            if color_filter is not None:
+                criteria.append(f"colors {color_name(color_filter)}")
+            console.print(
+                f"[red]No legal commander in your collection matches "
+                f"{' + '.join(criteria) or 'the given filters'}.[/red]"
+            )
+            raise typer.Exit(1)
+        commander, support, fit = picked
+        reason = []
+        if theme:
+            reason.append(f"{support} on-theme cards in colors")
+            if fit:
+                reason.append(f"commander matches theme ({fit})")
+        else:
+            reason.append(f"{support} supporting cards")
+        console.print(
+            f"[green]Auto-selected commander:[/green] {commander.name} "
+            f"[{''.join(commander.color_identity) or 'C'}] — {', '.join(reason)}"
+        )
+
+    # Resolve / auto-pick a partner (second commander).
+    partner = None
+    if partner_name:
+        partner = index.get(partner_name)
+        if not partner:
+            console.print(f"[red]Partner '{partner_name}' not found[/red]")
+            raise typer.Exit(1)
+        if not can_partner(commander, partner):
+            console.print(
+                f"[red]'{commander.name}' and '{partner.name}' can't be partners. "
+                f"They need matching Partner, Partner with, Friends forever, "
+                f"Choose a Background + Background, or Doctor's companion + Doctor.[/red]"
+            )
+            raise typer.Exit(1)
+    elif not commander_name:
+        # Auto-pick mode: if the chosen commander wants a partner, find the best one owned.
+        partner = _auto_select_partner(
+            commander, collection_cards, theme, color_filter, rng, effective_variety
+        )
+        if partner:
+            console.print(
+                f"[green]Auto-selected partner:[/green] {partner.name} "
+                f"[{''.join(partner.color_identity) or 'C'}]"
+            )
+    else:
+        # Explicit commander with no --partner: hint if it wants one.
+        if partner_ability(commander).can_take_partner:
+            console.print(
+                "[dim]Tip: this commander can have a partner — pass --partner "
+                "\"Name\" to build a two-commander deck.[/dim]"
+            )
+
+    if partner:
+        identity = combined_identity(commander, partner)
+        console.print(
+            f"\n[bold]Commanders:[/bold] {commander.name} + {partner.name} "
+            f"[{''.join(sorted(identity)) or 'C'}]"
+        )
+        for c in (commander, partner):
+            console.print(f"[dim]{c.name}: {c.oracle_text}[/dim]")
+        console.print()
+    else:
+        console.print(f"\n[bold]Commander:[/bold] {commander.name} — {commander.type_line}")
+        console.print(f"[dim]{commander.oracle_text}[/dim]\n")
+
+    commander_others = 99 if partner is None else 98
+    num_commanders = 100 - commander_others
+
     with Progress(
         SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console
     ) as progress:
@@ -201,6 +426,7 @@ def build(
         candidates = build_candidates(
             collection_cards, commander,
             theme=theme, synergy_emphasis=synergy_emphasis, rank_emphasis=rank_emphasis,
+            partner=partner,
         )
 
     if theme:
@@ -273,7 +499,7 @@ def build(
             if bracket == 3 else ""
         )
 
-    target_nonland = 99 - lands
+    target_nonland = commander_others - lands
     if total_candidates < target_nonland:
         console.print(
             f"\n[yellow]Warning: Only {total_candidates} eligible cards found "
@@ -298,7 +524,9 @@ def build(
 
     if no_llm:
         console.print("[dim]Using heuristic selection (--no-llm)[/dim]")
-        picked = heuristic_pick(candidates, lands, rng=rng, variety=effective_variety)
+        picked = heuristic_pick(
+            candidates, lands, rng=rng, variety=effective_variety, others=commander_others
+        )
         deck_picks = []
         for slot, scored_list in picked.items():
             for sc in scored_list:
@@ -320,10 +548,13 @@ def build(
                     commander, candidates, lands,
                     extra_instructions=extra_instructions, owned_names=owned_names,
                     rng=rng, variety=effective_variety, prior_decks=prior_decks,
+                    partner=partner,
                 )
             except Exception as e:
                 console.print(f"[yellow]LLM failed ({e}), falling back to heuristic[/yellow]")
-                picked = heuristic_pick(candidates, lands, rng=rng, variety=effective_variety)
+                picked = heuristic_pick(
+                    candidates, lands, rng=rng, variety=effective_variety, others=commander_others
+                )
                 deck_picks = []
                 for slot, scored_list in picked.items():
                     for sc in scored_list:
@@ -334,11 +565,13 @@ def build(
                 upgrades = []
 
     # Backfill if LLM returned fewer than needed
-    target_nonland = 99 - lands
+    target_nonland = commander_others - lands
     if len(deck_picks) < target_nonland:
         deficit = target_nonland - len(deck_picks)
         picked_names = {p.card.name for p in deck_picks}
-        fallback = heuristic_pick(candidates, lands, rng=rng, variety=effective_variety)
+        fallback = heuristic_pick(
+            candidates, lands, rng=rng, variety=effective_variety, others=commander_others
+        )
         backfill: list[DeckPick] = []
         for slot, scored_list in fallback.items():
             for sc in scored_list:
@@ -354,7 +587,7 @@ def build(
             shortfall = target_nonland - len(deck_picks)
             console.print(
                 f"\n[yellow]Warning: Collection short by {shortfall} cards. "
-                f"Deck will have {len(deck_picks) + 1 + lands} cards instead of 100.[/yellow]"
+                f"Deck will have {len(deck_picks) + num_commanders + lands} cards instead of 100.[/yellow]"
             )
             console.print(
                 f"[yellow]Adding {shortfall} extra lands to fill. "
@@ -418,14 +651,14 @@ def build(
         land_cards = [c for c in land_cards if c.name not in excluded_set]
     land_picks = build_mana_base(
         [p.card for p in deck_picks], land_cards, commander, lands,
-        rng=rng, variety=effective_variety,
+        rng=rng, variety=effective_variety, partner=partner,
     )
 
     all_picks = deck_picks + land_picks
 
     if budget is not None:
         all_picks, swaps, final_price = enforce_budget(
-            all_picks, candidates, commander, budget
+            all_picks, candidates, commander, budget, partner=partner
         )
         if swaps:
             console.print(f"[green]Budget: swapped {swaps} cards to fit ${budget:.2f}[/green]")
@@ -440,12 +673,13 @@ def build(
 
     deck = Deck(
         commander=commander,
+        partner=partner,
         cards=all_picks,
         strategy_summary=strategy,
         upgrade_suggestions=upgrades,
     )
 
-    errors = validate_deck(commander, all_picks)
+    errors = validate_deck(commander, all_picks, partner=partner)
     if errors:
         console.print("[yellow]Validation warnings:[/yellow]")
         for err in errors:
@@ -472,7 +706,12 @@ def build(
 @app.command("suggest-commanders")
 def suggest_commanders(
     collection: Path = typer.Option(..., "--collection", "-c", help="Path to collection file"),
-    colors: Optional[str] = typer.Option(None, "--colors", help="Filter by color identity (e.g. WUB)"),
+    colors: Optional[str] = typer.Option(
+        None, "--colors", help="Filter by colors: WUBRG letters or a name (esper, jund, azorius)"
+    ),
+    theme: Optional[str] = typer.Option(
+        None, "--theme", help="Rank commanders by fit for an archetype (e.g. aristocrats, dragons)"
+    ),
     top: int = typer.Option(5, "--top", help="Number of suggestions"),
     variety: float = typer.Option(
         0.0, "--variety", min=0.0, max=1.0,
@@ -483,6 +722,8 @@ def suggest_commanders(
     ),
 ):
     """Suggest commanders from your collection."""
+    theme = _resolve_theme_or_exit(theme)
+    color_filter = _resolve_colors_or_exit(colors)
     effective_variety, rng = _setup_variety(variety, seed)
     index = _load_index()
 
@@ -490,30 +731,36 @@ def suggest_commanders(
     match_result = match_collection(entries, index)
     collection_cards = get_unique_cards(match_result.matched)
 
-    color_filter = set(colors.upper()) if colors else None
     owned_commanders = [
         c for c in collection_cards if is_legal_commander(c)
     ]
 
-    if color_filter:
+    if color_filter is not None:
         owned_commanders = [
             c for c in owned_commanders
-            if set(c.color_identity) == color_filter or set(c.color_identity).issubset(color_filter)
+            if set(c.color_identity).issubset(color_filter)
         ]
+
+    on_theme = (
+        {c.name for c in collection_cards if theme_hits(theme, c.oracle_text, c.type_line) > 0}
+        if theme else None
+    )
 
     scored_commanders: list[tuple[str, int, int, float]] = []
     for cmdr in owned_commanders:
-        support_cards = [
-            c for c in collection_cards
-            if set(c.color_identity).issubset(set(cmdr.color_identity))
-            and c.name != cmdr.name
-        ]
+        identity = set(cmdr.color_identity)
+        support = sum(
+            1 for c in collection_cards
+            if c.name != cmdr.name
+            and set(c.color_identity).issubset(identity)
+            and (on_theme is None or c.name in on_theme)
+        )
         rank = cmdr.edhrec_rank or 99999
-        support = len(support_cards)
-        weight_score = support + max(0.0, 100 - rank / 300)
+        fit = theme_hits(theme, cmdr.oracle_text, cmdr.type_line) if theme else 0
+        weight_score = fit * 60 + support + max(0.0, 100 - rank / 300)
         scored_commanders.append((cmdr.name, support, rank, weight_score))
 
-    scored_commanders.sort(key=lambda x: (-x[1], x[2]))
+    scored_commanders.sort(key=lambda x: (-x[3], x[2]))
 
     if effective_variety > 0 and rng is not None and len(scored_commanders) > top:
         pool = scored_commanders[: max(top * 4, top)]
@@ -627,13 +874,7 @@ def suggest(
     """Suggest cards to BUY that synergize with your commander."""
     from commanderai.deckbuilder.suggester import find_suggestions_heuristic, find_suggestions_llm
 
-    if theme and theme.lower() not in THEMES:
-        console.print(
-            f"[red]Unknown theme '{theme}'. Available: {', '.join(theme_names())}[/red]"
-        )
-        raise typer.Exit(1)
-    theme = theme.lower() if theme else None
-
+    theme = _resolve_theme_or_exit(theme)
     effective_variety, rng = _setup_variety(variety, seed)
     index = _load_index()
 

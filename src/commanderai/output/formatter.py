@@ -4,9 +4,10 @@ from commanderai.models import Deck, DeckPick, DeckSlot
 def format_deck(deck: Deck, verbose: bool = False) -> str:
     lines: list[str] = []
 
-    lines.append(f"=== Commander: {deck.commander.name} ===")
-    lines.append(f"    {deck.commander.type_line}")
-    lines.append(f"    {deck.commander.mana_cost}")
+    label = "Commanders" if deck.partner else "Commander"
+    lines.append(f"=== {label}: {' + '.join(c.name for c in deck.commanders)} ===")
+    for c in deck.commanders:
+        lines.append(f"    {c.name} — {c.type_line}  {c.mana_cost}")
     lines.append("")
 
     if deck.strategy_summary:

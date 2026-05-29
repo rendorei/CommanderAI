@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.7.0] - 2026-05-29
+
+### Added
+- **Partner / two-commander support** — `build` now accepts a second commander via `--partner/-P`. Handles all pairing rules: plain **Partner**, **Partner with X**, restricted **Partner — group**, **Friends forever**, **Choose a Background** + a **Background**, and **Doctor's companion** + a **Time Lord Doctor**. Illegal pairings are rejected with an explanation.
+  - Combined color identity (union of both) drives candidate filtering, the mana base, and validation; both commanders' text feeds synergy scoring.
+  - Deck math adjusts to 98 cards + 2 commanders = 100; validation, formatter, and all export formats (text/MTGO/Moxfield `*CMDR*`/Archidekt) list both.
+  - In auto-pick mode (no `--commander`), if the chosen commander wants a partner, the best-fit owned partner is auto-selected too (respects `--theme`/`--colors`/`--variety`).
+
+## [0.6.0] - 2026-05-29
+
+### Added
+- **Auto-pick commander** — `--commander` is now optional on `build`. Omit it and pass `--theme` and/or `--colors` to have CommanderAI choose the best-fit legal commander you own (scored by on-theme card support in its colors, the commander's own theme fit, and EDHREC rank). Respects `--variety` so a seed can surface a different fitting commander.
+- **Expanded archetypes** — `--theme` now understands ~35 strategy archetypes (storm, stax, taxes, enchantress, wheels, burn/group-slug, superfriends, vehicles, sagas, blink/ETB, mill, infect, treasure/food/clues, land-destruction, discard, lifedrain, toolbox, pillow-fort, fog, theft, clone, cascade, extra-combat, and more), creature **tribes** (elves, goblins, dragons, slivers, vampires, zombies, ...), and meme/synonym **aliases** (`go-wide`, `bogles`, `tron`, `death-and-taxes`, `8-rack`, `ponza`, ...).
+- **Color-combination names** — `--colors` accepts guild/shard/wedge/four-color/five-color names (`azorius`, `jund`, `esper`, `yore-tiller`, `five-color`) in addition to WUBRG letters, on both `build` and `suggest-commanders`.
+- **`suggest-commanders --theme`** — rank the commanders you own by how well they fit an archetype.
+
 ## [0.5.0] - 2026-05-29
 
 ### Added

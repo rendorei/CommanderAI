@@ -197,7 +197,7 @@ def find_suggestions_heuristic(
 
         theme_bonus = 0.0
         if theme:
-            th = theme_hits(theme, card.oracle_text)
+            th = theme_hits(theme, card.oracle_text, card.type_line)
             if th > 0:
                 theme_bonus = min(th * _THEME_BONUS_PER_HIT, _THEME_BONUS_CAP)
                 if theme not in hits:

@@ -20,21 +20,34 @@ def color_identity_filter(cards: list[Card], commander: Card) -> list[Card]:
     return [c for c in cards if set(c.color_identity).issubset(identity)]
 
 
-def validate_deck(commander: Card, picks: list[DeckPick]) -> list[str]:
+def validate_deck(
+    commander: Card, picks: list[DeckPick], partner: Card | None = None
+) -> list[str]:
     errors = []
 
-    if len(picks) != 99:
-        errors.append(f"Deck has {len(picks)} cards, need exactly 99 (+ commander)")
+    commanders = [commander] + ([partner] if partner else [])
+    required = 100 - len(commanders)
+    if len(picks) != required:
+        errors.append(
+            f"Deck has {len(picks)} cards, need exactly {required} "
+            f"(+ {len(commanders)} commander{'s' if len(commanders) > 1 else ''})"
+        )
 
-    identity = set(commander.color_identity)
+    identity: set[str] = set()
+    for c in commanders:
+        identity |= set(c.color_identity)
+    commander_names = {c.name for c in commanders}
+
     names_seen: dict[str, int] = {}
     for pick in picks:
         card = pick.card
         if not set(card.color_identity).issubset(identity):
             errors.append(
                 f"{card.name} has color identity {card.color_identity}, "
-                f"outside commander's {list(identity)}"
+                f"outside commanders' {sorted(identity)}"
             )
+        if card.name in commander_names:
+            errors.append(f"{card.name} is a commander and also in the 99")
 
         is_basic = _is_basic_land(card)
         if not is_basic:

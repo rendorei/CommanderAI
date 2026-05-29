@@ -2,7 +2,7 @@ import random
 
 from commanderai.config import CANDIDATES_PER_SLOT_MULTIPLIER, MAX_TOTAL_CANDIDATES, SLOT_QUOTAS
 from commanderai.models import Card, DeckSlot, ScoredCard
-from commanderai.deckbuilder.rules import color_identity_filter
+from commanderai.deckbuilder.partner import merge_commanders
 from commanderai.deckbuilder.scoring import score_card
 from commanderai.deckbuilder.slots import classify_card
 from commanderai.deckbuilder.variety import softmax_weights, weighted_sample_without_replacement
@@ -14,16 +14,25 @@ def build_candidates(
     theme: str | None = None,
     synergy_emphasis: float = 1.0,
     rank_emphasis: float = 1.0,
+    partner: Card | None = None,
 ) -> dict[DeckSlot, list[ScoredCard]]:
-    legal_cards = color_identity_filter(collection_cards, commander)
-    legal_cards = [c for c in legal_cards if c.name != commander.name]
+    # When there's a partner, score against the combined color identity and the
+    # union of both commanders' text/keywords.
+    scoring_commander = merge_commanders(commander, partner) if partner else commander
+    identity = set(scoring_commander.color_identity)
+    exclude = {commander.name} | ({partner.name} if partner else set())
+
+    legal_cards = [
+        c for c in collection_cards
+        if set(c.color_identity).issubset(identity) and c.name not in exclude
+    ]
 
     by_slot: dict[DeckSlot, list[ScoredCard]] = {slot: [] for slot in DeckSlot}
 
     for card in legal_cards:
         slot = classify_card(card)
         scored = score_card(
-            card, commander, slot,
+            card, scoring_commander, slot,
             theme=theme, synergy_emphasis=synergy_emphasis, rank_emphasis=rank_emphasis,
         )
         by_slot[slot].append(scored)
@@ -77,7 +86,10 @@ def heuristic_pick(
     land_count: int = 37,
     rng: random.Random | None = None,
     variety: float = 0.0,
+    others: int = 99,
 ) -> dict[DeckSlot, list[ScoredCard]]:
+    """Pick non-land cards. ``others`` is the count of non-commander cards in the
+    deck (99 for a single commander, 98 when there's a partner)."""
     picks: dict[DeckSlot, list[ScoredCard]] = {}
 
     for slot in DeckSlot:
@@ -88,7 +100,7 @@ def heuristic_pick(
         picks[slot] = _select_from_slot(available, quota, rng, variety)
 
     total_nonland = sum(len(v) for v in picks.values())
-    target_nonland = 99 - land_count
+    target_nonland = others - land_count
 
     if total_nonland < target_nonland:
         deficit = target_nonland - total_nonland

@@ -65,7 +65,7 @@ def score_card(
         reasons.append(f"{synergy_hits} synergy keywords")
 
     if theme:
-        hits = theme_hits(theme, card.oracle_text)
+        hits = theme_hits(theme, card.oracle_text, card.type_line)
         if hits > 0:
             theme_bonus = min(hits * _THEME_BONUS_PER_HIT, _THEME_BONUS_CAP)
             score += theme_bonus

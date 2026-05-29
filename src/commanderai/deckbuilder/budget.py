@@ -62,6 +62,7 @@ def enforce_budget(
     candidates: dict[DeckSlot, list[ScoredCard]],
     commander: Card,
     budget: float,
+    partner: Card | None = None,
 ) -> tuple[list[DeckPick], int, float]:
     """Greedily reduce a deck's total price to ``budget`` via card swaps.
 
@@ -75,6 +76,8 @@ def enforce_budget(
     """
     picks = list(picks)
     identity = set(commander.color_identity)
+    if partner:
+        identity |= set(partner.color_identity)
 
     picked_names = {p.card.name for p in picks}
     pool: dict[DeckSlot, list[Card]] = {}

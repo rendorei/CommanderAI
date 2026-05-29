@@ -54,13 +54,18 @@ class DeckPick(BaseModel):
 
 class Deck(BaseModel):
     commander: Card
+    partner: Card | None = None
     cards: list[DeckPick] = Field(default_factory=list)
     strategy_summary: str = ""
     upgrade_suggestions: list[str] = Field(default_factory=list)
 
     @property
+    def commanders(self) -> list[Card]:
+        return [self.commander] + ([self.partner] if self.partner else [])
+
+    @property
     def size(self) -> int:
-        return len(self.cards) + 1
+        return len(self.cards) + len(self.commanders)
 
     @property
     def avg_cmc(self) -> float:
@@ -70,8 +75,9 @@ class Deck(BaseModel):
     @property
     def total_price(self) -> float:
         total = 0.0
-        for pick in self.cards:
-            usd = pick.card.prices.get("usd")
+        priced = [p.card for p in self.cards] + self.commanders
+        for card in priced:
+            usd = card.prices.get("usd")
             if usd:
                 try:
                     total += float(usd)

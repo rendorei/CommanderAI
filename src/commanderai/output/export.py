@@ -2,7 +2,7 @@ from commanderai.models import Deck, DeckSlot
 
 
 def export_text(deck: Deck) -> str:
-    lines = [f"1 {deck.commander.name}"]
+    lines = [f"1 {c.name}" for c in deck.commanders]
     for pick in deck.cards:
         lines.append(f"1 {pick.card.name}")
     return "\n".join(lines)
@@ -13,16 +13,14 @@ def export_mtgo(deck: Deck) -> str:
 
 
 def export_moxfield(deck: Deck) -> str:
-    lines = []
-    lines.append(f"1 {deck.commander.name} *CMDR*")
+    lines = [f"1 {c.name} *CMDR*" for c in deck.commanders]
     for pick in deck.cards:
         lines.append(f"1 {pick.card.name}")
     return "\n".join(lines)
 
 
 def export_archidekt(deck: Deck) -> str:
-    lines = []
-    lines.append(f"1 {deck.commander.name} [Commander]")
+    lines = [f"1 {c.name} [Commander]" for c in deck.commanders]
     for pick in deck.cards:
         category = pick.slot.value.capitalize()
         lines.append(f"1 {pick.card.name} [{category}]")

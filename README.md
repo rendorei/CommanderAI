@@ -94,6 +94,47 @@ commanderai suggest-commanders -c data/my_collection.txt --variety 0.7
 commanderai suggest -c data/my_collection.txt -C "Y'shtola, Night's Blessed" --theme aristocrats --variety 0.6
 ```
 
+## Build by Theme (no commander needed)
+
+You don't have to know which commander to build. Give a `--theme` and/or `--colors` and CommanderAI picks the best-fit legal commander you own, then builds the deck.
+
+```bash
+# Auto-pick the best aristocrats commander you own
+commanderai build -c data/my_collection.txt --theme aristocrats
+
+# Constrain to a color combination (name or WUBRG letters)
+commanderai build -c data/my_collection.txt --colors jund --theme dragons
+commanderai build -c data/my_collection.txt --colors WUB --theme spellslinger
+
+# Just colors, no theme — best goodstuff commander in those colors
+commanderai build -c data/my_collection.txt --colors azorius
+```
+
+### Themes / archetypes
+
+`--theme` accepts:
+
+- **Archetypes**: `aristocrats`, `tokens`, `spellslinger`, `lifegain`, `lifedrain`, `counters`, `graveyard`, `reanimator`, `mill`, `blink`, `voltron`, `equipment`, `auras`, `enchantress`, `landfall`, `ramp`, `artifacts`, `treasure`, `food`, `clues`, `wheels`, `group_hug`, `burn`, `stax`, `taxes`, `superfriends`, `vehicles`, `sagas`, `toolbox`, `pillow_fort`, `fog`, `theft`, `clone`, `cascade`, `infect`, `discard`, `land_destruction`, `extra_combat`, `control`
+- **Tribes**: `elf`, `goblin`, `zombie`, `vampire`, `dragon`, `angel`, `sliver`, `merfolk`, `human`, `wizard`, ... (and more)
+- **Aliases**: `go-wide`→tokens, `storm`→spellslinger, `bogles`→auras, `tron`→ramp, `death-and-taxes`→taxes, `8-rack`→discard, `ponza`→land-destruction, `self-mill`→mill, ...
+
+### Color names
+
+`--colors` accepts WUBRG letters (`WUB`) or a combination name: guilds (`azorius`, `dimir`, `rakdos`, `gruul`, `selesnya`, `orzhov`, `izzet`, `golgari`, `boros`, `simic`), shards/wedges (`esper`, `grixis`, `jund`, `naya`, `bant`, `jeskai`, `sultai`, `mardu`, `temur`, `abzan`), four-color (`yore-tiller`, `glint-eye`, `dune-brood`, `ink-treader`, `witch-maw`), and `five-color`.
+
+## Partners (two commanders)
+
+Some commanders can share the command zone. Pass a second commander with `--partner` / `-P`:
+
+```bash
+commanderai build -c data/my_collection.txt \
+  -C "Thrasios, Triton Hero" -P "Tymna the Weaver"
+```
+
+Supported pairings: plain **Partner**, **Partner with X**, restricted **Partner — group**, **Friends forever**, **Choose a Background** + a **Background** enchantment, and **Doctor's companion** + a **Time Lord Doctor**. Illegal pairs are rejected.
+
+The deck uses the **combined color identity**, both commanders feed synergy scoring and the mana base, and the deck is built as 2 commanders + 98 cards = 100. When auto-picking (no `--commander`), if the chosen commander wants a partner, the best-fit one you own is auto-selected too.
+
 ## Power Brackets
 
 Control deck power level with `--bracket` (`-b`). Uses [Commander Spellbook](https://commanderspellbook.com/) API to detect combos and problematic cards in real time.
