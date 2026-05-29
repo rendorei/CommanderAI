@@ -39,7 +39,8 @@ def build_prompt(
         lines.append(f"**{c.name}** — {c.type_line}")
         lines.append(f"Mana Cost: {c.mana_cost}")
         lines.append(f"Text: {c.oracle_text}")
-    lines.append(f"Combined Color Identity: {', '.join(sorted(identity))}")
+    from commanderai.deckbuilder.colors import wubrg_sort
+    lines.append(f"Combined Color Identity: {', '.join(wubrg_sort(identity))}")
     lines.append("")
     lines.append(f"## Deck Slots (pick {nonland_slots} non-land cards total)")
     lines.append(f"Lands will be selected separately ({land_count} total).")

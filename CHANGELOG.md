@@ -2,6 +2,9 @@
 
 ## [0.7.0] - 2026-05-29
 
+### Fixed
+- Color identities now display in canonical **WUBRG** order everywhere (e.g. `WUBRG` instead of the alphabetical `BGRUW`) across `list commanders`, `suggest-commanders`, auto-pick, partner output, and warnings.
+
 ### Added
 - **`list` command** — `commanderai list [commanders|decks|colors|themes|tribes|aliases|formats|brackets]`. `list commanders` shows every eligible commander in your collection (with color identity, EDHREC rank, and partner ability); the rest show saved decks and the vocabularies accepted by `--theme`, `--colors`, `-f`, and `-b`.
 - **Default collection** — `--collection`/`-c` is now optional across `build`, `suggest`, `suggest-commanders`, and `list commanders`, defaulting to `data/my_collection.txt`. A clear error is shown if the file is missing.

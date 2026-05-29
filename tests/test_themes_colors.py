@@ -1,4 +1,4 @@
-from commanderai.deckbuilder.colors import color_name, resolve_colors
+from commanderai.deckbuilder.colors import color_name, format_colors, resolve_colors, wubrg_sort
 from commanderai.deckbuilder.themes import (
     archetype_names,
     resolve_theme,
@@ -64,3 +64,13 @@ def test_color_name_roundtrip():
     assert color_name({"W", "U", "B"}) == "esper"
     assert color_name({"B", "R", "G"}) == "jund"
     assert color_name({"W", "U"}) == "azorius"
+
+
+def test_wubrg_ordering():
+    # Alphabetical input must render in canonical WUBRG order
+    assert format_colors(["B", "G", "R", "U", "W"]) == "WUBRG"
+    assert format_colors({"B", "R", "G"}) == "BRG"
+    assert format_colors(["G", "W"]) == "WG"
+    assert format_colors([]) == "C"
+    assert format_colors([], empty="colorless") == "colorless"
+    assert wubrg_sort(["G", "W", "B"]) == ["W", "B", "G"]

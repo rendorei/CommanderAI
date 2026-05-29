@@ -53,6 +53,17 @@ COLOR_NAMES: dict[str, str] = {
 }
 
 _VALID_LETTERS = set("WUBRG")
+_WUBRG_ORDER = "WUBRG"
+
+
+def wubrg_sort(colors) -> list[str]:
+    """Sort color letters into canonical WUBRG order (non-colors last)."""
+    return sorted(colors, key=lambda c: _WUBRG_ORDER.index(c) if c in _WUBRG_ORDER else 99)
+
+
+def format_colors(colors, empty: str = "C") -> str:
+    """Render a color identity as WUBRG-ordered letters (``empty`` if colorless)."""
+    return "".join(wubrg_sort(colors)) or empty
 
 
 def color_name(identity: set[str]) -> str:

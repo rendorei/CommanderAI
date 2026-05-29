@@ -21,7 +21,13 @@ from commanderai.deckbuilder.llm_picker import llm_build
 from commanderai.deckbuilder.mana_base import build_mana_base
 from commanderai.deckbuilder.rules import is_legal_commander, validate_deck
 from commanderai.deckbuilder.slots import classify_card
-from commanderai.deckbuilder.colors import COLOR_NAMES, color_name, resolve_colors
+from commanderai.deckbuilder.colors import (
+    COLOR_NAMES,
+    color_name,
+    format_colors,
+    resolve_colors,
+    wubrg_sort,
+)
 from commanderai.deckbuilder.partner import (
     can_partner,
     combined_identity,
@@ -382,7 +388,7 @@ def build(
             reason.append(f"{support} supporting cards")
         console.print(
             f"[green]Auto-selected commander:[/green] {commander.name} "
-            f"[{''.join(commander.color_identity) or 'C'}] — {', '.join(reason)}"
+            f"[{format_colors(commander.color_identity)}] — {', '.join(reason)}"
         )
 
     # Resolve / auto-pick a partner (second commander).
@@ -407,7 +413,7 @@ def build(
         if partner:
             console.print(
                 f"[green]Auto-selected partner:[/green] {partner.name} "
-                f"[{''.join(partner.color_identity) or 'C'}]"
+                f"[{format_colors(partner.color_identity)}]"
             )
     else:
         # Explicit commander with no --partner: hint if it wants one.
@@ -421,7 +427,7 @@ def build(
         identity = combined_identity(commander, partner)
         console.print(
             f"\n[bold]Commanders:[/bold] {commander.name} + {partner.name} "
-            f"[{''.join(sorted(identity)) or 'C'}]"
+            f"[{format_colors(identity)}]"
         )
         for c in (commander, partner):
             console.print(f"[dim]{c.name}: {c.oracle_text}[/dim]")
@@ -521,7 +527,7 @@ def build(
         )
         if total_candidates < 30:
             console.print(
-                f"[red]Not enough cards in {'/'.join(commander.color_identity) or 'colorless'} "
+                f"[red]Not enough cards in {'/'.join(wubrg_sort(commander.color_identity)) or 'colorless'} "
                 f"to build a viable deck. Try a commander with more color overlap.[/red]"
             )
             raise typer.Exit(1)
@@ -606,7 +612,7 @@ def build(
             console.print(
                 f"[yellow]Adding {shortfall} extra lands to fill. "
                 f"Consider acquiring more cards in "
-                f"{'/'.join(commander.color_identity) or 'colorless'}.[/yellow]\n"
+                f"{'/'.join(wubrg_sort(commander.color_identity)) or 'colorless'}.[/yellow]\n"
             )
             lands += shortfall
 
@@ -790,7 +796,7 @@ def suggest_commanders(
     console.print(f"\n[bold]Top {top} Commander Suggestions:[/bold]\n")
     for i, (name, support, rank, _) in enumerate(chosen, 1):
         card = index.get(name)
-        identity = "".join(card.color_identity) if card else "?"
+        identity = format_colors(card.color_identity) if card else "?"
         console.print(
             f"  {i}. [bold]{name}[/bold] [{identity}] "
             f"— {support} supporting cards (EDHREC #{rank})"
@@ -1153,7 +1159,7 @@ def list_(
         commanders, note = _head_tail(commanders, head, tail)
         console.print(f"\n[bold]Eligible commanders ({total}):[/bold]{note}\n")
         for c in commanders:
-            identity = "".join(c.color_identity) or "C"
+            identity = format_colors(c.color_identity)
             rank = c.edhrec_rank or "?"
             ability = partner_ability(c)
             tags = []
