@@ -3,6 +3,7 @@
 ## [0.7.0] - 2026-05-29
 
 ### Added
+- **`list` command** — `commanderai list [decks|colors|themes|tribes|aliases|formats|brackets]` shows saved decks (with commander + card count) and the vocabularies accepted by `--theme`, `--colors`, `-f`, and `-b`.
 - **Partner / two-commander support** — `build` now accepts a second commander via `--partner/-P`. Handles all pairing rules: plain **Partner**, **Partner with X**, restricted **Partner — group**, **Friends forever**, **Choose a Background** + a **Background**, and **Doctor's companion** + a **Time Lord Doctor**. Illegal pairings are rejected with an explanation.
   - Combined color identity (union of both) drives candidate filtering, the mana base, and validation; both commanders' text feeds synergy scoring.
   - Deck math adjusts to 98 cards + 2 commanders = 100; validation, formatter, and all export formats (text/MTGO/Moxfield `*CMDR*`/Archidekt) list both.

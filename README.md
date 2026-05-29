@@ -44,6 +44,7 @@ commanderai build -c data/my_collection.txt -C "Atraxa, Praetors' Voice"
 | `convert` | Convert Archidekt/CSV export to simple text format |
 | `update-data` | Download/refresh Scryfall card database |
 | `validate` | Check a deck for Commander legality |
+| `list` | List saved decks, or the colors/themes/tribes/aliases/formats/brackets vocabularies |
 
 ## Build Options
 
@@ -111,6 +112,8 @@ commanderai build -c data/my_collection.txt --colors azorius
 ```
 
 ### Themes / archetypes
+
+> Tip: run `commanderai list themes`, `list tribes`, `list aliases`, or `list colors` to see every accepted value.
 
 `--theme` accepts:
 

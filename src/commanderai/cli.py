@@ -1026,5 +1026,122 @@ def tokens(
     console.print(f"\n[dim]Total: {len(token_list)} unique tokens from {len(matched_cards)} cards[/dim]")
 
 
+class ListCategory(str, Enum):
+    decks = "decks"
+    colors = "colors"
+    themes = "themes"
+    tribes = "tribes"
+    aliases = "aliases"
+    formats = "formats"
+    brackets = "brackets"
+
+
+_EXPORT_FORMATS = {
+    "text": "Plain '1 Card' list (default)",
+    "mtgo": "MTGO-compatible list",
+    "moxfield": "Moxfield import (commanders tagged *CMDR*)",
+    "archidekt": "Archidekt import (cards tagged by slot)",
+}
+
+_BRACKET_DESCRIPTIONS = {
+    1: "Exhibition — no game changers, combos, extra turns, or MLD",
+    2: "Core — no game changers, no two-card combos, no extra turns/MLD",
+    3: "Upgraded — up to 3 game changers, 1 late combo (≥6 mana)",
+    4: "Optimized — no restrictions (banlist only)",
+    5: "cEDH — full power, no filtering applied",
+}
+
+# Group the color names for readable output.
+_COLOR_GROUPS = [
+    ("Mono", ["white", "blue", "black", "red", "green"]),
+    ("Guilds (2)", ["azorius", "dimir", "rakdos", "gruul", "selesnya",
+                    "orzhov", "izzet", "golgari", "boros", "simic"]),
+    ("Shards & Wedges (3)", ["esper", "grixis", "jund", "naya", "bant",
+                             "jeskai", "sultai", "mardu", "temur", "abzan"]),
+    ("Four-color", ["yore-tiller", "glint-eye", "dune-brood", "ink-treader", "witch-maw"]),
+    ("Five-color", ["five-color"]),
+]
+
+
+def _deck_summary(path: Path) -> tuple[str, int]:
+    """Return (commander label, card count) for a saved deck file."""
+    commander = ""
+    count = 0
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        m = re.match(r"^=== Commanders?:\s*(.+?)\s*===$", line)
+        if m:
+            commander = m.group(1)
+            continue
+        if re.match(r"^\d+x?\s+\S", line):
+            count += 1
+            if not commander:
+                name = re.sub(r"^\d+x?\s+", "", line)
+                name = re.split(r"\s+(?:\[|\*|\{)", name, maxsplit=1)[0].strip()
+                commander = name
+    return commander, count
+
+
+@app.command("list")
+def list_(
+    category: ListCategory = typer.Argument(
+        ..., help="What to list: decks, colors, themes, tribes, aliases, formats, brackets"
+    ),
+):
+    """List saved decks or the vocabularies used by --theme, --colors, -f, and -b."""
+    if category == ListCategory.decks:
+        if not DECKS_DIR.exists():
+            console.print("[yellow]No decks directory yet. Build a deck first.[/yellow]")
+            return
+        files = sorted(
+            DECKS_DIR.glob("*.txt"), key=lambda p: p.stat().st_mtime, reverse=True
+        )
+        if not files:
+            console.print("[yellow]No saved decks in decks/ yet.[/yellow]")
+            return
+        console.print(f"\n[bold]Saved decks ({len(files)}):[/bold]\n")
+        for path in files:
+            commander, count = _deck_summary(path)
+            label = f" — [dim]{commander}[/dim]" if commander else ""
+            console.print(f"  [green]{path.name}[/green] ({count} cards){label}")
+
+    elif category == ListCategory.colors:
+        console.print("\n[bold]Color combinations[/bold] (use with --colors):\n")
+        for group, names in _COLOR_GROUPS:
+            console.print(f"  [bold]{group}[/bold]")
+            for name in names:
+                console.print(f"    {name:14} [dim]{COLOR_NAMES.get(name, '')}[/dim]")
+            console.print()
+
+    elif category == ListCategory.themes:
+        names = archetype_names()
+        console.print(f"\n[bold]Archetypes ({len(names)})[/bold] (use with --theme):\n")
+        for name in names:
+            console.print(f"  {name}")
+        console.print("\n[dim]Also accepts tribes (`list tribes`) and aliases (`list aliases`).[/dim]")
+
+    elif category == ListCategory.tribes:
+        tribes = sorted(TRIBES)
+        console.print(f"\n[bold]Creature tribes ({len(tribes)})[/bold] (use with --theme):\n")
+        cols = 4
+        for i in range(0, len(tribes), cols):
+            console.print("  " + "".join(f"{t:16}" for t in tribes[i:i + cols]))
+
+    elif category == ListCategory.aliases:
+        console.print(f"\n[bold]Theme aliases ({len(ALIASES)})[/bold] → canonical:\n")
+        for alias in sorted(ALIASES):
+            console.print(f"  {alias:18} [dim]→ {ALIASES[alias]}[/dim]")
+
+    elif category == ListCategory.formats:
+        console.print("\n[bold]Export formats[/bold] (use with -f/--format):\n")
+        for name, desc in _EXPORT_FORMATS.items():
+            console.print(f"  [green]{name:10}[/green] [dim]{desc}[/dim]")
+
+    elif category == ListCategory.brackets:
+        console.print("\n[bold]Power brackets[/bold] (use with -b/--bracket):\n")
+        for level, desc in _BRACKET_DESCRIPTIONS.items():
+            console.print(f"  [green]{level}[/green]  [dim]{desc}[/dim]")
+
+
 if __name__ == "__main__":
     app()
