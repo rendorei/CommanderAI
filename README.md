@@ -44,7 +44,28 @@ commanderai build -c data/my_collection.txt -C "Atraxa, Praetors' Voice"
 | `convert` | Convert Archidekt/CSV export to simple text format |
 | `update-data` | Download/refresh Scryfall card database |
 | `validate` | Check a deck for Commander legality |
-| `list` | List saved decks, or the colors/themes/tribes/aliases/formats/brackets vocabularies |
+| `list` | List eligible commanders, saved decks, or the colors/themes/tribes/aliases/formats/brackets vocabularies |
+
+> `--collection`/`-c` is optional for `build`, `suggest`, `suggest-commanders`, and `list commanders` — it defaults to `data/my_collection.txt`.
+
+```bash
+commanderai list commanders                 # every eligible commander you own
+commanderai list commanders --colors jund --head 20   # top 20 in Jund
+commanderai list decks --tail 5             # 5 most recent saved decks
+```
+
+### Configuration (`.env`)
+
+Copy `.env.example` to `.env` to set defaults without exporting shell variables:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+# COMMANDERAI_COLLECTION=data/my_collection.txt   # default collection file
+# COMMANDERAI_DECKS_DIR=decks                     # where decks are saved
+# COMMANDERAI_CACHE=~/.commanderai                # Scryfall cache location
+```
+
+Shell environment variables take precedence over `.env`.
 
 ## Build Options
 

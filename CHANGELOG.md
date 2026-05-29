@@ -3,7 +3,10 @@
 ## [0.7.0] - 2026-05-29
 
 ### Added
-- **`list` command** — `commanderai list [decks|colors|themes|tribes|aliases|formats|brackets]` shows saved decks (with commander + card count) and the vocabularies accepted by `--theme`, `--colors`, `-f`, and `-b`.
+- **`list` command** — `commanderai list [commanders|decks|colors|themes|tribes|aliases|formats|brackets]`. `list commanders` shows every eligible commander in your collection (with color identity, EDHREC rank, and partner ability); the rest show saved decks and the vocabularies accepted by `--theme`, `--colors`, `-f`, and `-b`.
+- **Default collection** — `--collection`/`-c` is now optional across `build`, `suggest`, `suggest-commanders`, and `list commanders`, defaulting to `data/my_collection.txt`. A clear error is shown if the file is missing.
+- **`list --head N` / `--tail N`** — limit long `list commanders` / `list decks` output.
+- **`.env` support + path overrides** — a project-local `.env` is now loaded automatically. `COMMANDERAI_COLLECTION`, `COMMANDERAI_DECKS_DIR`, and `COMMANDERAI_CACHE` override the default collection, decks directory, and cache location (shell environment still wins). See `.env.example`.
 - **Partner / two-commander support** — `build` now accepts a second commander via `--partner/-P`. Handles all pairing rules: plain **Partner**, **Partner with X**, restricted **Partner — group**, **Friends forever**, **Choose a Background** + a **Background**, and **Doctor's companion** + a **Time Lord Doctor**. Illegal pairings are rejected with an explanation.
   - Combined color identity (union of both) drives candidate filtering, the mana base, and validation; both commanders' text feeds synergy scoring.
   - Deck math adjusts to 98 cards + 2 commanders = 100; validation, formatter, and all export formats (text/MTGO/Moxfield `*CMDR*`/Archidekt) list both.

@@ -1,8 +1,17 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
-DECKS_DIR = PROJECT_DIR / "decks"
+
+# Load a project-local .env (shell environment still takes precedence).
+load_dotenv(PROJECT_DIR / ".env")
+
+DECKS_DIR = Path(os.environ.get("COMMANDERAI_DECKS_DIR", PROJECT_DIR / "decks"))
+DEFAULT_COLLECTION = Path(
+    os.environ.get("COMMANDERAI_COLLECTION", PROJECT_DIR / "data" / "my_collection.txt")
+)
 
 CACHE_DIR = Path(os.environ.get("COMMANDERAI_CACHE", Path.home() / ".commanderai"))
 ORACLE_CARDS_PATH = CACHE_DIR / "oracle_cards.json"

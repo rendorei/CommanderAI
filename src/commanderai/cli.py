@@ -9,7 +9,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from commanderai.collection.matcher import get_unique_cards, match_collection
 from commanderai.collection.parser import aggregate_entries, convert_to_text, parse_collection
-from commanderai.config import DECKS_DIR, DEFAULT_LAND_COUNT
+from commanderai.config import DECKS_DIR, DEFAULT_COLLECTION, DEFAULT_LAND_COUNT
 from commanderai.data.card_index import CardIndex
 from commanderai.data.scryfall import download_bulk_data, load_cards, load_non_legal_names
 from commanderai.deckbuilder.budget import (
@@ -198,6 +198,17 @@ def _setup_variety(variety: float, seed: Optional[int]) -> tuple[float, "random.
     return effective, make_rng(resolved)
 
 
+def _require_collection(path: Path) -> None:
+    """Exit with a friendly message if the collection file is missing."""
+    if not path.exists():
+        console.print(
+            f"[red]Collection file not found: {path}[/red]\n"
+            f"[dim]Pass --collection/-c <file>, or create the default "
+            f"{DEFAULT_COLLECTION} (e.g. via `commanderai convert`).[/dim]"
+        )
+        raise typer.Exit(1)
+
+
 _BASIC_LANDS = {"Plains", "Island", "Swamp", "Mountain", "Forest", "Wastes"}
 
 
@@ -246,7 +257,9 @@ def _load_prior_decks(commander_name: str) -> list[list[str]]:
 
 @app.command()
 def build(
-    collection: Path = typer.Option(..., "--collection", "-c", help="Path to collection file"),
+    collection: Path = typer.Option(
+        DEFAULT_COLLECTION, "--collection", "-c", help="Path to collection file"
+    ),
     commander_name: Optional[str] = typer.Option(
         None, "--commander", "-C",
         help="Commander card name (omit to auto-pick from --theme/--colors)",
@@ -299,6 +312,7 @@ def build(
     synergy_emphasis = 1.0 + effective_variety if effective_variety > 0 else 1.0
     rank_emphasis = 1.0 - 0.4 * effective_variety if effective_variety > 0 else 1.0
 
+    _require_collection(collection)
     index = _load_index()
 
     entries = parse_collection(collection)
@@ -705,7 +719,9 @@ def build(
 
 @app.command("suggest-commanders")
 def suggest_commanders(
-    collection: Path = typer.Option(..., "--collection", "-c", help="Path to collection file"),
+    collection: Path = typer.Option(
+        DEFAULT_COLLECTION, "--collection", "-c", help="Path to collection file"
+    ),
     colors: Optional[str] = typer.Option(
         None, "--colors", help="Filter by colors: WUBRG letters or a name (esper, jund, azorius)"
     ),
@@ -725,6 +741,7 @@ def suggest_commanders(
     theme = _resolve_theme_or_exit(theme)
     color_filter = _resolve_colors_or_exit(colors)
     effective_variety, rng = _setup_variety(variety, seed)
+    _require_collection(collection)
     index = _load_index()
 
     entries = parse_collection(collection)
@@ -855,7 +872,9 @@ def convert(
 
 @app.command()
 def suggest(
-    collection: Path = typer.Option(..., "--collection", "-c", help="Path to collection file"),
+    collection: Path = typer.Option(
+        DEFAULT_COLLECTION, "--collection", "-c", help="Path to collection file"
+    ),
     commander_name: str = typer.Option(..., "--commander", "-C", help="Commander card name"),
     deck_file: Optional[Path] = typer.Option(None, "--deck", "-d", help="Current deck file (for targeted suggestions)"),
     top: int = typer.Option(15, "--top", help="Number of suggestions"),
@@ -876,6 +895,7 @@ def suggest(
 
     theme = _resolve_theme_or_exit(theme)
     effective_variety, rng = _setup_variety(variety, seed)
+    _require_collection(collection)
     index = _load_index()
 
     entries = parse_collection(collection)
@@ -1026,7 +1046,18 @@ def tokens(
     console.print(f"\n[dim]Total: {len(token_list)} unique tokens from {len(matched_cards)} cards[/dim]")
 
 
+def _head_tail(items: "list", head: Optional[int], tail: Optional[int]) -> tuple["list", str]:
+    """Slice a list for --head/--tail and return (subset, note)."""
+    total = len(items)
+    if head is not None and head < total:
+        return items[:head], f" (showing first {head} of {total})"
+    if tail is not None and tail < total:
+        return items[-tail:], f" (showing last {tail} of {total})"
+    return items, ""
+
+
 class ListCategory(str, Enum):
+    commanders = "commanders"
     decks = "decks"
     colors = "colors"
     themes = "themes"
@@ -1085,10 +1116,65 @@ def _deck_summary(path: Path) -> tuple[str, int]:
 @app.command("list")
 def list_(
     category: ListCategory = typer.Argument(
-        ..., help="What to list: decks, colors, themes, tribes, aliases, formats, brackets"
+        ...,
+        help="What to list: commanders, decks, colors, themes, tribes, aliases, formats, brackets",
     ),
+    collection: Path = typer.Option(
+        DEFAULT_COLLECTION, "--collection", "-c",
+        help="Collection file (used by `list commanders`)",
+    ),
+    colors: Optional[str] = typer.Option(
+        None, "--colors", help="Filter `list commanders` by colors (e.g. jund, WUB)"
+    ),
+    head: Optional[int] = typer.Option(None, "--head", min=1, help="Show only the first N entries"),
+    tail: Optional[int] = typer.Option(None, "--tail", min=1, help="Show only the last N entries"),
 ):
-    """List saved decks or the vocabularies used by --theme, --colors, -f, and -b."""
+    """List eligible commanders, saved decks, or the vocabularies used by the flags."""
+    if head is not None and tail is not None:
+        console.print("[red]Use either --head or --tail, not both.[/red]")
+        raise typer.Exit(1)
+
+    if category == ListCategory.commanders:
+        color_filter = _resolve_colors_or_exit(colors)
+        _require_collection(collection)
+        index = _load_index()
+        match_result = match_collection(parse_collection(collection), index)
+        collection_cards = get_unique_cards(match_result.matched)
+
+        commanders = [c for c in collection_cards if is_legal_commander(c)]
+        if color_filter is not None:
+            commanders = [c for c in commanders if set(c.color_identity).issubset(color_filter)]
+        commanders.sort(key=lambda c: (c.edhrec_rank or 99999, c.name))
+
+        if not commanders:
+            console.print("[yellow]No eligible commanders found in your collection.[/yellow]")
+            return
+        total = len(commanders)
+        commanders, note = _head_tail(commanders, head, tail)
+        console.print(f"\n[bold]Eligible commanders ({total}):[/bold]{note}\n")
+        for c in commanders:
+            identity = "".join(c.color_identity) or "C"
+            rank = c.edhrec_rank or "?"
+            ability = partner_ability(c)
+            tags = []
+            if ability.partner_with:
+                tags.append(f"Partner with {ability.partner_with[0]}")
+            elif ability.plain:
+                tags.append("Partner")
+            if ability.group:
+                tags.append(f"Partner — {ability.group}")
+            if ability.background_chooser:
+                tags.append("Choose a Background")
+            if ability.doctors_companion:
+                tags.append("Doctor's companion")
+            if ability.friends_forever:
+                tags.append("Friends forever")
+            tag_str = f"  [magenta]({', '.join(tags)})[/magenta]" if tags else ""
+            console.print(
+                f"  [bold]{c.name}[/bold] [{identity}] [dim]EDHREC #{rank}[/dim]{tag_str}"
+            )
+        return
+
     if category == ListCategory.decks:
         if not DECKS_DIR.exists():
             console.print("[yellow]No decks directory yet. Build a deck first.[/yellow]")
@@ -1099,7 +1185,9 @@ def list_(
         if not files:
             console.print("[yellow]No saved decks in decks/ yet.[/yellow]")
             return
-        console.print(f"\n[bold]Saved decks ({len(files)}):[/bold]\n")
+        total = len(files)
+        files, note = _head_tail(files, head, tail)
+        console.print(f"\n[bold]Saved decks ({total}):[/bold]{note}\n")
         for path in files:
             commander, count = _deck_summary(path)
             label = f" — [dim]{commander}[/dim]" if commander else ""
