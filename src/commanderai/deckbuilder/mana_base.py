@@ -14,6 +14,19 @@ _COLOR_TO_BASIC = {
 }
 
 
+def make_basic_land(color: str) -> Card:
+    """Construct a basic land Card for a WUBRG color, or None if unmapped."""
+    basic_name = _COLOR_TO_BASIC.get(color)
+    if not basic_name:
+        return None
+    return Card(
+        name=basic_name,
+        type_line="Basic Land",
+        color_identity=[],
+        oracle_text=f"({{{color}}})",
+    )
+
+
 def count_pips(cards: list[Card]) -> Counter:
     pips: Counter = Counter()
     for card in cards:
@@ -102,29 +115,18 @@ def _distribute_basics(pips: Counter, identity: set[str], count: int) -> list[De
     for color in sorted(identity):
         ratio = pips.get(color, 1) / total
         num = max(1, round(ratio * count))
-        basic_name = _COLOR_TO_BASIC.get(color)
-        if not basic_name:
+        basic = make_basic_land(color)
+        if not basic:
             continue
         for _ in range(num):
             if len(picks) >= count:
                 break
-            basic = Card(
-                name=basic_name,
-                type_line="Basic Land",
-                color_identity=[],
-                oracle_text=f"({{{color}}})",
-            )
-            picks.append(DeckPick(card=basic, slot=DeckSlot.LAND, reason="basic land"))
+            picks.append(DeckPick(card=basic.model_copy(), slot=DeckSlot.LAND, reason="basic land"))
 
     while len(picks) < count:
         fallback_color = max(identity, key=lambda c: pips.get(c, 0))
-        basic = Card(
-            name=_COLOR_TO_BASIC[fallback_color],
-            type_line="Basic Land",
-            color_identity=[],
-            oracle_text=f"({{{fallback_color}}})",
-        )
-        picks.append(DeckPick(card=basic, slot=DeckSlot.LAND, reason="basic land"))
+        basic = make_basic_land(fallback_color)
+        picks.append(DeckPick(card=basic.model_copy(), slot=DeckSlot.LAND, reason="basic land"))
 
     return picks[:count]
 

@@ -11,6 +11,10 @@ from commanderai.collection.parser import aggregate_entries, convert_to_text, pa
 from commanderai.config import DECKS_DIR, DEFAULT_LAND_COUNT
 from commanderai.data.card_index import CardIndex
 from commanderai.data.scryfall import download_bulk_data, load_cards, load_non_legal_names
+from commanderai.deckbuilder.budget import (
+    enforce_budget,
+    filter_candidates_by_budget,
+)
 from commanderai.deckbuilder.candidates import build_candidates, heuristic_pick
 from commanderai.deckbuilder.llm_picker import llm_build
 from commanderai.deckbuilder.mana_base import build_mana_base
@@ -105,6 +109,14 @@ def build(
     total_candidates = sum(len(v) for v in candidates.values() if v)
     console.print(f"[dim]Found {total_candidates} candidate cards across all slots[/dim]")
 
+    if budget is not None:
+        candidates, removed = filter_candidates_by_budget(candidates, budget)
+        if removed:
+            console.print(
+                f"[dim]Budget ${budget:.2f}: dropped {removed} cards priced above budget[/dim]"
+            )
+        total_candidates = sum(len(v) for v in candidates.values() if v)
+
     bracket_info = ""
     bracket_result = None
     if bracket and bracket < 5:
@@ -175,6 +187,15 @@ def build(
             raise typer.Exit(1)
         console.print("[yellow]Building best possible deck — will be underpowered.[/yellow]\n")
 
+    extra_instructions = bracket_info
+    if budget is not None:
+        budget_note = (
+            f"BUDGET: Keep the total deck price at or under ${budget:.2f} USD. "
+            f"Prefer cheaper cards (prices shown in parentheses) when synergy is similar. "
+            f"Lands are added separately, so leave some headroom."
+        )
+        extra_instructions = f"{extra_instructions} {budget_note}".strip()
+
     if no_llm:
         console.print("[dim]Using heuristic selection (--no-llm)[/dim]")
         picked = heuristic_pick(candidates, lands)
@@ -192,7 +213,7 @@ def build(
             try:
                 deck_picks, strategy, upgrades = llm_build(
                     commander, candidates, lands,
-                    extra_instructions=bracket_info, owned_names=owned_names,
+                    extra_instructions=extra_instructions, owned_names=owned_names,
                 )
             except Exception as e:
                 console.print(f"[yellow]LLM failed ({e}), falling back to heuristic[/yellow]")
@@ -294,6 +315,21 @@ def build(
     )
 
     all_picks = deck_picks + land_picks
+
+    if budget is not None:
+        all_picks, swaps, final_price = enforce_budget(
+            all_picks, candidates, commander, budget
+        )
+        if swaps:
+            console.print(f"[green]Budget: swapped {swaps} cards to fit ${budget:.2f}[/green]")
+        if final_price > budget:
+            console.print(
+                f"[yellow]Budget: could not reach ${budget:.2f} — best is "
+                f"${final_price:.2f} with the available pool. Add cheaper cards "
+                f"to your collection or raise --budget.[/yellow]"
+            )
+        else:
+            console.print(f"[green]Budget: deck fits at ${final_price:.2f} / ${budget:.2f}[/green]")
 
     deck = Deck(
         commander=commander,

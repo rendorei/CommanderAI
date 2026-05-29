@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.0] - 2026-05-29
+
+### Added
+- **Budget cap** (`--budget` USD) — now functional. Caps the deck's total estimated price: candidates priced above the budget are dropped up front, the LLM is told the target, and after assembly the most expensive cards are greedily swapped for cheaper same-slot owned alternatives (non-basic lands downgrade to basics). Reports the final price vs. budget and warns if the pool can't meet it.
+
 ## [0.3.0] - 2026-05-29
 
 ### Added
