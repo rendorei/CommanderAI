@@ -16,6 +16,8 @@ def build_prompt(
     commander: Card,
     candidates: dict[DeckSlot, list[ScoredCard]],
     land_count: int = _LAND_COUNT_DEFAULT,
+    extra_instructions: str = "",
+    owned_names: set[str] | None = None,
 ) -> str:
     nonland_slots = 99 - land_count
     lines = []
@@ -48,11 +50,16 @@ def build_prompt(
         lines.append("")
 
     lines.append("## Instructions")
+    if extra_instructions:
+        lines.append(f"- **{extra_instructions}**")
     lines.append(f"- Select exactly {nonland_slots} cards total across all slots")
     lines.append("- Respect approximate quotas per slot (±2 is fine for synergy reasons)")
     lines.append("- Prioritize synergy with the commander's strategy")
     lines.append("- Ensure a smooth mana curve (target avg CMC ~2.8-3.2)")
     lines.append("- You can ONLY pick cards from the candidates listed above")
+    if owned_names:
+        lines.append("- For upgrade_suggestions: ONLY suggest cards the user does NOT own")
+        lines.append(f"- The user owns {len(owned_names)} cards total — all candidates above are owned")
     lines.append("")
     lines.append("## Response Format (JSON only)")
     lines.append("""```json
@@ -61,7 +68,7 @@ def build_prompt(
     {"name": "Card Name", "slot": "RAMP", "reason": "short reason"}
   ],
   "strategy_summary": "2-3 sentence overview of the deck strategy",
-  "upgrade_suggestions": ["Card Name 1", "Card Name 2", "...up to 5 cards NOT in candidates that would improve the deck"]
+  "upgrade_suggestions": ["Card Name 1", "Card Name 2", "...up to 5 cards the user does NOT own that would improve the deck"]
 }
 ```""")
 
@@ -72,13 +79,15 @@ def call_llm(
     commander: Card,
     candidates: dict[DeckSlot, list[ScoredCard]],
     land_count: int = _LAND_COUNT_DEFAULT,
+    extra_instructions: str = "",
+    owned_names: set[str] | None = None,
 ) -> dict:
     if not ANTHROPIC_API_KEY:
         raise RuntimeError(
             "ANTHROPIC_API_KEY not set. Use --no-llm flag or set the environment variable."
         )
 
-    prompt = build_prompt(commander, candidates, land_count)
+    prompt = build_prompt(commander, candidates, land_count, extra_instructions, owned_names)
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
     message = client.messages.create(
@@ -101,6 +110,7 @@ def call_llm(
 def parse_llm_response(
     response: dict,
     candidates: dict[DeckSlot, list[ScoredCard]],
+    owned_names: set[str] | None = None,
 ) -> tuple[list[DeckPick], str, list[str]]:
     name_to_card: dict[str, tuple[Card, DeckSlot]] = {}
     for slot, scored_list in candidates.items():
@@ -132,6 +142,8 @@ def llm_build(
     commander: Card,
     candidates: dict[DeckSlot, list[ScoredCard]],
     land_count: int = _LAND_COUNT_DEFAULT,
+    extra_instructions: str = "",
+    owned_names: set[str] | None = None,
 ) -> tuple[list[DeckPick], str, list[str]]:
-    response = call_llm(commander, candidates, land_count)
-    return parse_llm_response(response, candidates)
+    response = call_llm(commander, candidates, land_count, extra_instructions, owned_names)
+    return parse_llm_response(response, candidates, owned_names)

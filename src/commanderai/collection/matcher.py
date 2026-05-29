@@ -48,8 +48,12 @@ def match_collection(entries: list[CollectionEntry], index: CardIndex) -> MatchR
             result.matched.append(entry)
             continue
 
+        if entry.card_name.lower() in index.non_legal_names:
+            result.skipped_tokens.append(entry.card_name)
+            continue
+
         close = difflib.get_close_matches(
-            entry.card_name.lower(), all_names, n=1, cutoff=0.85
+            entry.card_name.lower(), all_names, n=1, cutoff=0.90
         )
         if close:
             card = index.by_name_lower[close[0]]

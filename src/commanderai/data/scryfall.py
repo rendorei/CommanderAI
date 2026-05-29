@@ -54,6 +54,9 @@ def download_bulk_data(force: bool = False) -> Path:
     return ORACLE_CARDS_PATH
 
 
+_NON_LEGAL_TYPES = {"plane", "phenomenon", "scheme", "vanguard", "conspiracy"}
+
+
 def load_cards(path: Path | None = None) -> list[Card]:
     path = path or ORACLE_CARDS_PATH
     if not path.exists():
@@ -97,3 +100,30 @@ def load_cards(path: Path | None = None) -> list[Card]:
         )
 
     return cards
+
+
+def load_non_legal_names(path: Path | None = None) -> set[str]:
+    """Load names of cards that exist in Scryfall but aren't Commander-legal."""
+    path = path or ORACLE_CARDS_PATH
+    if not path.exists():
+        return set()
+
+    raw = path.read_bytes()
+    cards_data = orjson.loads(raw)
+
+    names = set()
+    for c in cards_data:
+        if c.get("legalities", {}).get("commander") == "legal":
+            continue
+        name = c.get("name", "")
+        if name:
+            names.add(name.lower())
+            type_line = c.get("type_line", "").lower()
+            if any(t in type_line for t in _NON_LEGAL_TYPES):
+                names.add(name.lower())
+            if c.get("card_faces"):
+                for face in c["card_faces"]:
+                    face_name = face.get("name", "")
+                    if face_name:
+                        names.add(face_name.lower())
+    return names

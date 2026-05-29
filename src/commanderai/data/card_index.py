@@ -2,10 +2,11 @@ from commanderai.models import Card
 
 
 class CardIndex:
-    def __init__(self, cards: list[Card]):
+    def __init__(self, cards: list[Card], non_legal_names: set[str] | None = None):
         self.all_cards = cards
         self.by_name: dict[str, Card] = {}
         self.by_name_lower: dict[str, Card] = {}
+        self.non_legal_names: set[str] = non_legal_names or set()
 
         for card in cards:
             self.by_name[card.name] = card

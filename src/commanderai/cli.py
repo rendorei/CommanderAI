@@ -10,7 +10,7 @@ from commanderai.collection.matcher import get_unique_cards, match_collection
 from commanderai.collection.parser import aggregate_entries, convert_to_text, parse_collection
 from commanderai.config import DECKS_DIR, DEFAULT_LAND_COUNT
 from commanderai.data.card_index import CardIndex
-from commanderai.data.scryfall import download_bulk_data, load_cards
+from commanderai.data.scryfall import download_bulk_data, load_cards, load_non_legal_names
 from commanderai.deckbuilder.candidates import build_candidates, heuristic_pick
 from commanderai.deckbuilder.llm_picker import llm_build
 from commanderai.deckbuilder.mana_base import build_mana_base
@@ -30,8 +30,9 @@ def _load_index() -> CardIndex:
     ) as progress:
         progress.add_task("Loading card database...", total=None)
         cards = load_cards()
+        non_legal = load_non_legal_names()
     console.print(f"[dim]Loaded {len(cards)} Commander-legal cards[/dim]")
-    return CardIndex(cards)
+    return CardIndex(cards, non_legal_names=non_legal)
 
 
 @app.command()
@@ -41,6 +42,7 @@ def build(
     no_llm: bool = typer.Option(False, "--no-llm", help="Skip LLM, use heuristic only"),
     lands: int = typer.Option(DEFAULT_LAND_COUNT, "--lands", help="Number of lands"),
     budget: Optional[float] = typer.Option(None, "--budget", help="Max deck price in USD"),
+    bracket: Optional[int] = typer.Option(None, "--bracket", "-b", min=1, max=5, help="Power bracket 1-5 (1=casual, 5=cEDH)"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Write deck to file"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show scoring details"),
     format: str = typer.Option("text", "--format", "-f", help="Output format"),
@@ -84,6 +86,8 @@ def build(
     console.print(f"[dim]{commander.oracle_text}[/dim]\n")
 
     collection_cards = get_unique_cards(match_result.matched)
+    owned_names = {c.name for c in collection_cards}
+    owned_names_lower = {n.lower() for n in owned_names}
 
     if len(collection_cards) < 20:
         console.print(
@@ -100,6 +104,62 @@ def build(
 
     total_candidates = sum(len(v) for v in candidates.values() if v)
     console.print(f"[dim]Found {total_candidates} candidate cards across all slots[/dim]")
+
+    bracket_info = ""
+    bracket_result = None
+    if bracket and bracket < 5:
+        from commanderai.deckbuilder.bracket import check_bracket
+
+        all_candidate_cards = [sc.card for scored_list in candidates.values() for sc in scored_list]
+        with Progress(
+            SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console
+        ) as progress:
+            progress.add_task(f"Checking bracket {bracket} constraints (Commander Spellbook)...", total=None)
+            bracket_result = check_bracket(commander, all_candidate_cards, bracket)
+
+        if bracket_result.excluded_cards:
+            console.print(f"\n[yellow]Bracket {bracket} — excluded {len(bracket_result.excluded_cards)} cards:[/yellow]")
+            for name, reason in bracket_result.excluded_cards[:15]:
+                console.print(f"  [red]✗[/red] {name} ({reason})")
+            if len(bracket_result.excluded_cards) > 15:
+                console.print(f"  [dim]... and {len(bracket_result.excluded_cards) - 15} more[/dim]")
+
+        if bracket_result.excluded_combos:
+            console.print(f"[yellow]Excluded {len(bracket_result.excluded_combos)} combos:[/yellow]")
+            for combo_cards, reason in bracket_result.excluded_combos[:5]:
+                console.print(f"  [red]✗[/red] {' + '.join(combo_cards)} ({reason})")
+
+        for slot in candidates:
+            candidates[slot] = [
+                sc for sc in candidates[slot]
+                if sc.card.name in bracket_result.allowed_names
+            ]
+
+        if bracket_result.prioritized_names:
+            for slot in candidates:
+                for sc in candidates[slot]:
+                    if sc.card.name in bracket_result.prioritized_names:
+                        sc.score += 50
+                candidates[slot].sort(key=lambda sc: sc.score, reverse=True)
+            console.print(
+                f"[green]Prioritized {len(bracket_result.prioritized_names)} "
+                f"high-value cards within bracket limits[/green]"
+            )
+
+        new_total = sum(len(v) for v in candidates.values() if v)
+        console.print(f"[dim]{new_total} candidates remaining after bracket filter[/dim]\n")
+        bracket_info = (
+            f"IMPORTANT: This deck must be bracket {bracket} (1=most casual, 5=cEDH). "
+            f"Do NOT include infinite combos or two-card win conditions. "
+            f"No extra turns, no mass land denial. "
+            f"Prioritize fun, interactive gameplay over efficiency."
+            if bracket <= 2 else
+            f"IMPORTANT: This deck targets bracket 3 (Upgraded). "
+            f"Up to 3 game changers allowed. One late-game two-card combo OK (mana value 6+). "
+            f"No chaining extra turns, no mass land denial. "
+            f"Prioritize strong synergy and high card quality."
+            if bracket == 3 else ""
+        )
 
     target_nonland = 99 - lands
     if total_candidates < target_nonland:
@@ -130,7 +190,10 @@ def build(
         ) as progress:
             progress.add_task("Asking Claude for deck picks...", total=None)
             try:
-                deck_picks, strategy, upgrades = llm_build(commander, candidates, lands)
+                deck_picks, strategy, upgrades = llm_build(
+                    commander, candidates, lands,
+                    extra_instructions=bracket_info, owned_names=owned_names,
+                )
             except Exception as e:
                 console.print(f"[yellow]LLM failed ({e}), falling back to heuristic[/yellow]")
                 picked = heuristic_pick(candidates, lands)
@@ -173,7 +236,59 @@ def build(
             )
             lands += shortfall
 
+    # Refinement: if LLM suggested upgrades that we actually own, swap them in
+    # Only replace backfill cards or cards with strictly worse EDHREC rank
+    if upgrades:
+        picked_names = {p.card.name.lower() for p in deck_picks}
+        all_candidate_by_name: dict[str, ScoredCard] = {}
+        for slot_list in candidates.values():
+            for sc in slot_list:
+                all_candidate_by_name[sc.card.name.lower()] = sc
+
+        swapped = 0
+        for upgrade_name in upgrades[:]:
+            sc = all_candidate_by_name.get(upgrade_name.lower())
+            if not sc or upgrade_name.lower() in picked_names:
+                continue
+
+            upgrade_rank = sc.card.edhrec_rank or 99999
+
+            # Prefer replacing backfill cards first
+            same_slot_picks = [
+                (i, p) for i, p in enumerate(deck_picks) if p.slot == sc.slot
+            ]
+            backfill_picks = [(i, p) for i, p in same_slot_picks if "backfill" in p.reason]
+
+            if backfill_picks:
+                target_idx, target = backfill_picks[0]
+            elif same_slot_picks:
+                # Only replace if upgrade is strictly better (lower EDHREC rank)
+                target_idx, target = max(
+                    same_slot_picks, key=lambda x: x[1].card.edhrec_rank or 99999
+                )
+                target_rank = target.card.edhrec_rank or 99999
+                if upgrade_rank >= target_rank:
+                    continue
+            else:
+                continue
+
+            deck_picks[target_idx] = DeckPick(
+                card=sc.card, slot=sc.slot, reason=f"upgrade swap (replaced {target.card.name})"
+            )
+            picked_names.add(upgrade_name.lower())
+            upgrades.remove(upgrade_name)
+            swapped += 1
+
+        if swapped:
+            console.print(f"[green]Swapped in {swapped} owned upgrade cards[/green]")
+
+    # Filter owned cards from remaining upgrade suggestions
+    upgrades = [u for u in upgrades if u.lower() not in owned_names_lower]
+
     land_cards = [c for c in collection_cards if classify_card(c) == DeckSlot.LAND]
+    if bracket_result and bracket_result.excluded_cards:
+        excluded_set = {name for name, _ in bracket_result.excluded_cards}
+        land_cards = [c for c in land_cards if c.name not in excluded_set]
     land_picks = build_mana_base(
         [p.card for p in deck_picks], land_cards, commander, lands
     )

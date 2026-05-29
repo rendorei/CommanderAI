@@ -54,10 +54,36 @@ commanderai build \
   --no-llm \                     # Skip AI (free, fast)
   --lands 35 \                   # Adjust land count
   --budget 50 \                  # Max deck price (USD)
+  --bracket 2 \                  # Power bracket 1-5 (see below)
   -f archidekt \                 # Export format: text/mtgo/moxfield/archidekt
   -o decks/my_deck.txt \         # Output path (default: decks/<commander>.txt)
   -v                             # Verbose — show why each card was picked
 ```
+
+## Power Brackets
+
+Control deck power level with `--bracket` (`-b`). Uses [Commander Spellbook](https://commanderspellbook.com/) API to detect combos and problematic cards in real time.
+
+| Bracket | Style | What's allowed |
+|---------|-------|----------------|
+| 1 | Exhibition | No game changers, no combos, no extra turns, no MLD |
+| 2 | Core | No game changers, no two-card combos, no extra turns, no MLD |
+| 3 | Upgraded | Up to 3 game changers, 1 late-game combo (≥6 mana), no extra turn chains, no MLD |
+| 4 | Optimized | No restrictions (only banlist) |
+| 5 | cEDH | Same as 4, no filtering applied |
+
+```bash
+# Casual game night — no Rhystic Study, no Cyclonic Rift, no infinite combos
+commanderai build -c data/my_collection.txt -C "Atraxa, Praetors' Voice" -b 2
+
+# Focused but fair — strong synergy allowed, no instant-win combos
+commanderai build -c data/my_collection.txt -C "Atraxa, Praetors' Voice" -b 3
+
+# Full power
+commanderai build -c data/my_collection.txt -C "Atraxa, Praetors' Voice" -b 5
+```
+
+The bracket filter shows exactly which cards and combos were excluded, so you can see what got cut and why.
 
 ## Output
 
