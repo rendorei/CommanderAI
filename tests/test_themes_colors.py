@@ -1,5 +1,6 @@
 from commanderai.deckbuilder.colors import color_name, format_colors, resolve_colors, wubrg_sort
 from commanderai.deckbuilder.themes import (
+    apply_theme_quotas,
     archetype_names,
     resolve_theme,
     theme_hits,
@@ -64,6 +65,39 @@ def test_color_name_roundtrip():
     assert color_name({"W", "U", "B"}) == "esper"
     assert color_name({"B", "R", "G"}) == "jund"
     assert color_name({"W", "U"}) == "azorius"
+
+
+_BASE = {"LAND": 37, "RAMP": 10, "DRAW": 10, "REMOVAL": 8, "WIPE": 4, "THREAT": 20, "UTILITY": 10}
+
+
+def test_quota_no_theme_is_unchanged():
+    assert apply_theme_quotas(_BASE, None) == _BASE
+    # must be a copy, not the same object
+    assert apply_theme_quotas(_BASE, None) is not _BASE
+
+
+def test_quota_spellslinger_fewer_threats_more_spells():
+    q = apply_theme_quotas(_BASE, "spellslinger")
+    assert q["THREAT"] < _BASE["THREAT"]
+    assert q["DRAW"] > _BASE["DRAW"]
+
+
+def test_quota_tribe_is_aggressive():
+    q = apply_theme_quotas(_BASE, "goblin")
+    assert q["THREAT"] > _BASE["THREAT"]
+    assert q["WIPE"] < _BASE["WIPE"]
+
+
+def test_quota_alias_resolves():
+    # 'go-wide' -> tokens; 'storm' -> spellslinger
+    assert apply_theme_quotas(_BASE, "go-wide") == apply_theme_quotas(_BASE, "tokens")
+    assert apply_theme_quotas(_BASE, "storm") == apply_theme_quotas(_BASE, "spellslinger")
+
+
+def test_quota_never_negative():
+    for theme in ("voltron", "control", "ramp", "burn", "stax"):
+        q = apply_theme_quotas(_BASE, theme)
+        assert all(v >= 0 for v in q.values())
 
 
 def test_wubrg_ordering():

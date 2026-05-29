@@ -291,6 +291,61 @@ ALIASES: dict[str, str] = {
 }
 
 
+# Per-archetype tweaks to the default role quotas (deltas, applied on top of the
+# base SLOT_QUOTAS = RAMP10/DRAW10/REMOVAL8/WIPE4/THREAT20/UTILITY10). Negative
+# trims a role, positive expands it. The deck total is still re-balanced to the
+# target afterward, so these only reshape the mix.
+#
+# Calibrated against published Commander composition data — The Command Zone
+# "Deckbuilding Template" (ep. 658) and commanderdeckmaker.com "Ratios by
+# Archetype" — mapped into our exclusive role buckets (instants/sorceries,
+# equipment/auras, sac outlets, anthems, etc. land in UTILITY/REMOVAL/DRAW).
+THEME_QUOTA_DELTAS: dict[str, dict[str, int]] = {
+    # creatures 6-10, 35-45 instants/sorceries -> gut THREAT, load spells
+    "spellslinger": {"THREAT": -12, "DRAW": 4, "REMOVAL": 3, "UTILITY": 5},
+    # creatures 10-15, removal 12-15, wipes 5-7, draw 10-12
+    "control": {"THREAT": -8, "REMOVAL": 5, "WIPE": 2, "DRAW": 2, "UTILITY": -1},
+    # recursive creatures/tokens 8-12, sac outlets 5-8, payoffs 6-10, removal/draw down
+    "aristocrats": {"THREAT": 4, "UTILITY": 4, "REMOVAL": -2, "DRAW": -2, "WIPE": -2, "RAMP": -2},
+    # token makers + anthems, go-wide hates symmetric wipes
+    "tokens": {"THREAT": 4, "UTILITY": 4, "WIPE": -2, "RAMP": -2, "DRAW": -2, "REMOVAL": -2},
+    # equipment/auras 12-16 + protection 6-8 + evasion; few creatures, few wipes
+    "voltron": {"THREAT": -10, "UTILITY": 12, "REMOVAL": -2, "WIPE": -2, "DRAW": 2},
+    "equipment": {"THREAT": -8, "UTILITY": 10, "REMOVAL": -2},
+    "auras": {"THREAT": -8, "UTILITY": 10, "REMOVAL": -2},
+    "enchantress": {"THREAT": -6, "UTILITY": 6, "DRAW": 2, "REMOVAL": -2},
+    "ramp": {"RAMP": 8, "THREAT": -4, "DRAW": -2, "WIPE": -2},
+    "landfall": {"RAMP": 4, "THREAT": 2, "DRAW": -2, "WIPE": -2, "UTILITY": -2},
+    "reanimator": {"DRAW": 2, "UTILITY": 2, "THREAT": -2, "RAMP": -2},
+    "burn": {"THREAT": -6, "UTILITY": 6, "REMOVAL": 2, "WIPE": -2},
+    # planeswalker-centric control: more interaction, fewer creatures
+    "superfriends": {"THREAT": -6, "REMOVAL": 3, "WIPE": 3},
+    "stax": {"THREAT": -6, "UTILITY": 6},
+    "mill": {"THREAT": -6, "UTILITY": 4, "DRAW": 2},
+    "infect": {"THREAT": 6, "WIPE": -2, "RAMP": -2, "DRAW": -2},
+    "lifegain": {"UTILITY": 4, "THREAT": -2, "WIPE": -2},
+    "lifedrain": {"UTILITY": 4, "THREAT": -2, "WIPE": -2},
+    "counters": {"THREAT": 4, "WIPE": -2, "DRAW": -2},
+    "land_destruction": {"UTILITY": 4, "THREAT": -2, "DRAW": -2},
+}
+
+# Creature-tribe themes: 25-35 creatures + lords/anthems, less removal & few
+# wipes (you keep your own board). Draw stays at baseline.
+_TRIBAL_DELTAS: dict[str, int] = {"THREAT": 8, "REMOVAL": -2, "WIPE": -2, "UTILITY": -4}
+
+
+def apply_theme_quotas(base: dict[str, int], theme: str | None) -> dict[str, int]:
+    """Return slot quotas adjusted for a theme (base unchanged when no theme)."""
+    canonical = resolve_theme(theme)
+    quotas = dict(base)
+    if not canonical:
+        return quotas
+    deltas = _TRIBAL_DELTAS if canonical in TRIBES else THEME_QUOTA_DELTAS.get(canonical, {})
+    for slot, delta in deltas.items():
+        quotas[slot] = max(0, quotas.get(slot, 0) + delta)
+    return quotas
+
+
 def resolve_theme(name: str | None) -> str | None:
     """Resolve a user-supplied theme/alias/tribe to a canonical key, or None."""
     if not name:

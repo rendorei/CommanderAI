@@ -15,6 +15,7 @@ def build_candidates(
     synergy_emphasis: float = 1.0,
     rank_emphasis: float = 1.0,
     partner: Card | None = None,
+    quotas: dict[str, int] | None = None,
 ) -> dict[DeckSlot, list[ScoredCard]]:
     # When there's a partner, score against the combined color identity and the
     # union of both commanders' text/keywords.
@@ -40,18 +41,19 @@ def build_candidates(
     for slot in by_slot:
         by_slot[slot].sort(key=lambda s: s.score, reverse=True)
 
-    trimmed = _trim_candidates(by_slot)
+    trimmed = _trim_candidates(by_slot, quotas or SLOT_QUOTAS)
     return trimmed
 
 
 def _trim_candidates(
     by_slot: dict[DeckSlot, list[ScoredCard]],
+    quotas: dict[str, int],
 ) -> dict[DeckSlot, list[ScoredCard]]:
     trimmed: dict[DeckSlot, list[ScoredCard]] = {}
     total = 0
 
     for slot in DeckSlot:
-        quota = SLOT_QUOTAS.get(slot.value, 10)
+        quota = quotas.get(slot.value, 10)
         max_for_slot = quota * CANDIDATES_PER_SLOT_MULTIPLIER
         candidates = by_slot.get(slot, [])[:max_for_slot]
         trimmed[slot] = candidates
@@ -87,15 +89,17 @@ def heuristic_pick(
     rng: random.Random | None = None,
     variety: float = 0.0,
     others: int = 99,
+    quotas: dict[str, int] | None = None,
 ) -> dict[DeckSlot, list[ScoredCard]]:
     """Pick non-land cards. ``others`` is the count of non-commander cards in the
     deck (99 for a single commander, 98 when there's a partner)."""
+    quotas = quotas or SLOT_QUOTAS
     picks: dict[DeckSlot, list[ScoredCard]] = {}
 
     for slot in DeckSlot:
         if slot == DeckSlot.LAND:
             continue
-        quota = SLOT_QUOTAS.get(slot.value, 10)
+        quota = quotas.get(slot.value, 10)
         available = candidates.get(slot, [])
         picks[slot] = _select_from_slot(available, quota, rng, variety)
 

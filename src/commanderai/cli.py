@@ -9,7 +9,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from commanderai.collection.matcher import get_unique_cards, match_collection
 from commanderai.collection.parser import aggregate_entries, convert_to_text, parse_collection
-from commanderai.config import DECKS_DIR, DEFAULT_COLLECTION, DEFAULT_LAND_COUNT
+from commanderai.config import DECKS_DIR, DEFAULT_COLLECTION, DEFAULT_LAND_COUNT, SLOT_QUOTAS
 from commanderai.data.card_index import CardIndex
 from commanderai.data.scryfall import download_bulk_data, load_cards, load_non_legal_names
 from commanderai.deckbuilder.budget import (
@@ -36,6 +36,7 @@ from commanderai.deckbuilder.partner import (
 from commanderai.deckbuilder.themes import (
     ALIASES,
     TRIBES,
+    apply_theme_quotas,
     archetype_names,
     resolve_theme,
     theme_hits,
@@ -317,6 +318,7 @@ def build(
     effective_variety, rng = _setup_variety(variety, seed)
     synergy_emphasis = 1.0 + effective_variety if effective_variety > 0 else 1.0
     rank_emphasis = 1.0 - 0.4 * effective_variety if effective_variety > 0 else 1.0
+    quotas = apply_theme_quotas(SLOT_QUOTAS, theme)
 
     _require_collection(collection)
     index = _load_index()
@@ -446,11 +448,22 @@ def build(
         candidates = build_candidates(
             collection_cards, commander,
             theme=theme, synergy_emphasis=synergy_emphasis, rank_emphasis=rank_emphasis,
-            partner=partner,
+            partner=partner, quotas=quotas,
         )
 
     if theme:
         console.print(f"[dim]Theme: leaning into '{theme}'[/dim]")
+        changed = {
+            s: f"{SLOT_QUOTAS[s]}→{quotas[s]}"
+            for s in SLOT_QUOTAS
+            if s != "LAND" and quotas.get(s) != SLOT_QUOTAS.get(s)
+        }
+        if changed:
+            console.print(
+                "[dim]Role mix adjusted: "
+                + ", ".join(f"{s} {v}" for s, v in changed.items())
+                + "[/dim]"
+            )
 
     total_candidates = sum(len(v) for v in candidates.values() if v)
     console.print(f"[dim]Found {total_candidates} candidate cards across all slots[/dim]")
@@ -545,7 +558,8 @@ def build(
     if no_llm:
         console.print("[dim]Using heuristic selection (--no-llm)[/dim]")
         picked = heuristic_pick(
-            candidates, lands, rng=rng, variety=effective_variety, others=commander_others
+            candidates, lands, rng=rng, variety=effective_variety,
+            others=commander_others, quotas=quotas,
         )
         deck_picks = []
         for slot, scored_list in picked.items():
@@ -568,12 +582,13 @@ def build(
                     commander, candidates, lands,
                     extra_instructions=extra_instructions, owned_names=owned_names,
                     rng=rng, variety=effective_variety, prior_decks=prior_decks,
-                    partner=partner,
+                    partner=partner, quotas=quotas,
                 )
             except Exception as e:
                 console.print(f"[yellow]LLM failed ({e}), falling back to heuristic[/yellow]")
                 picked = heuristic_pick(
-                    candidates, lands, rng=rng, variety=effective_variety, others=commander_others
+                    candidates, lands, rng=rng, variety=effective_variety,
+                    others=commander_others, quotas=quotas,
                 )
                 deck_picks = []
                 for slot, scored_list in picked.items():
@@ -590,7 +605,8 @@ def build(
         deficit = target_nonland - len(deck_picks)
         picked_names = {p.card.name for p in deck_picks}
         fallback = heuristic_pick(
-            candidates, lands, rng=rng, variety=effective_variety, others=commander_others
+            candidates, lands, rng=rng, variety=effective_variety,
+            others=commander_others, quotas=quotas,
         )
         backfill: list[DeckPick] = []
         for slot, scored_list in fallback.items():

@@ -23,7 +23,9 @@ def build_prompt(
     variety: float = 0.0,
     prior_decks: list[list[str]] | None = None,
     partner: Card | None = None,
+    quotas: dict[str, int] | None = None,
 ) -> str:
+    quotas = quotas or SLOT_QUOTAS
     commanders = [commander] + ([partner] if partner else [])
     nonland_slots = (100 - len(commanders)) - land_count
     identity: set[str] = set()
@@ -49,7 +51,7 @@ def build_prompt(
     for slot in DeckSlot:
         if slot == DeckSlot.LAND:
             continue
-        quota = SLOT_QUOTAS.get(slot.value, 10)
+        quota = quotas.get(slot.value, 10)
         slot_candidates = candidates.get(slot, [])
         if not slot_candidates:
             continue
@@ -123,6 +125,7 @@ def call_llm(
     variety: float = 0.0,
     prior_decks: list[list[str]] | None = None,
     partner: Card | None = None,
+    quotas: dict[str, int] | None = None,
 ) -> dict:
     if not ANTHROPIC_API_KEY:
         raise RuntimeError(
@@ -131,7 +134,7 @@ def call_llm(
 
     prompt = build_prompt(
         commander, candidates, land_count, extra_instructions, owned_names,
-        rng=rng, variety=variety, prior_decks=prior_decks, partner=partner,
+        rng=rng, variety=variety, prior_decks=prior_decks, partner=partner, quotas=quotas,
     )
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -193,9 +196,10 @@ def llm_build(
     variety: float = 0.0,
     prior_decks: list[list[str]] | None = None,
     partner: Card | None = None,
+    quotas: dict[str, int] | None = None,
 ) -> tuple[list[DeckPick], str, list[str]]:
     response = call_llm(
         commander, candidates, land_count, extra_instructions, owned_names,
-        rng=rng, variety=variety, prior_decks=prior_decks, partner=partner,
+        rng=rng, variety=variety, prior_decks=prior_decks, partner=partner, quotas=quotas,
     )
     return parse_llm_response(response, candidates, owned_names)
