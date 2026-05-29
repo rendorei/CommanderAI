@@ -45,11 +45,34 @@ def _looks_like_csv(first_line: str) -> bool:
     return "," in lower and any(h in lower for h in _CSV_HEADERS)
 
 
+# Annotations added by deck exports that should be stripped before matching:
+#   archidekt slot tags  -> "1 Sol Ring [Ramp]"
+#   moxfield markers      -> "1 Sol Ring *CMDR*"
+#   our text format       -> "1 Sol Ring  {2}  // reason"
+_SLOT_TAG_RE = re.compile(r"\s*\[[^\]]*\]\s*$")
+_MARKER_RE = re.compile(r"\s*\*[^*]*\*")
+_MANA_TAIL_RE = re.compile(r"\s*\{[^}]*\}.*$")
+
+
+def _clean_card_line(line: str) -> str:
+    line = _MARKER_RE.sub("", line)
+    line = _SLOT_TAG_RE.sub("", line)
+    line = _MANA_TAIL_RE.sub("", line)
+    return line.strip()
+
+
 def _parse_text(lines: list[str]) -> list[CollectionEntry]:
     entries = []
     for line in lines:
         line = line.strip()
         if not line or line.startswith("#") or line.startswith("//"):
+            continue
+        # Skip structural lines from our human-readable deck format.
+        if line.startswith("===") or line.startswith("---"):
+            continue
+
+        line = _clean_card_line(line)
+        if not line:
             continue
 
         match = _LINE_PATTERN.match(line)

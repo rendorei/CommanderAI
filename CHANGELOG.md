@@ -4,6 +4,7 @@
 
 ### Fixed
 - Color identities now display in canonical **WUBRG** order everywhere (e.g. `WUBRG` instead of the alphabetical `BGRUW`) across `list commanders`, `suggest-commanders`, auto-pick, partner output, and warnings.
+- **`tokens`/`explain`/`validate` on exported decks** — the collection parser now strips export annotations (Archidekt `[Slot]` tags, Moxfield `*CMDR*`, and `{mana}`/section headers from the text format) before matching. Previously an Archidekt-format deck parsed every card as `"Name [Slot]"` and matched nothing (e.g. `tokens` reported "No token-creating cards"). DFC `Front // Back` names are preserved.
 
 ### Added
 - **`list` command** — `commanderai list [commanders|decks|colors|themes|tribes|aliases|formats|brackets]`. `list commanders` shows every eligible commander in your collection (with color identity, EDHREC rank, and partner ability); the rest show saved decks and the vocabularies accepted by `--theme`, `--colors`, `-f`, and `-b`.

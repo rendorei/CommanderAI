@@ -14,6 +14,37 @@ def test_parse_simple_lines():
     assert entries[2].card_name == "Atraxa, Praetors' Voice"
 
 
+def test_parse_archidekt_slot_tags():
+    text = "1 Hei Bai, Forest Guardian [Commander]\n1 Gilded Goose [Ramp]\n1 Forest [Land]"
+    entries = parse_collection(text)
+    names = [e.card_name for e in entries]
+    assert names == ["Hei Bai, Forest Guardian", "Gilded Goose", "Forest"]
+
+
+def test_parse_moxfield_cmdr_marker():
+    text = "1 Thrasios, Triton Hero *CMDR*\n1 Sol Ring"
+    entries = parse_collection(text)
+    assert entries[0].card_name == "Thrasios, Triton Hero"
+    assert entries[1].card_name == "Sol Ring"
+
+
+def test_parse_text_format_with_mana_and_headers():
+    text = (
+        "=== Commander: Atraxa ===\n"
+        "--- RAMP (2) ---\n"
+        "  1 Sol Ring  {1}\n"
+        "  1 Arcane Signet  {2}\n"
+    )
+    entries = parse_collection(text)
+    names = [e.card_name for e in entries]
+    assert names == ["Sol Ring", "Arcane Signet"]
+
+
+def test_parse_preserves_dfc_name():
+    entries = parse_collection("1 Vincent Valentine // Galian Beast")
+    assert entries[0].card_name == "Vincent Valentine // Galian Beast"
+
+
 def test_parse_with_set_code():
     text = "1 Sol Ring (C21)\n1 Command Tower (CMR) 350"
     entries = parse_collection(text)
