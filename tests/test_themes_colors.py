@@ -48,6 +48,30 @@ def test_archetype_names_nonempty():
     assert "stax" in names
 
 
+def test_resolve_oops_all_draw_alias():
+    assert resolve_theme("oops all draw") == "draw_game"
+    assert resolve_theme("oops-all-draws") == "draw_game"
+    assert resolve_theme("stalemate") == "draw_game"
+    assert resolve_theme("draw-game") == "draw_game"
+
+
+def test_draw_game_matches_game_enders_not_card_draw():
+    # Marquee enablers literally end the game in a draw.
+    assert theme_hits("draw_game", "When you remove the last intervention counter, the game is a draw.") >= 1
+    assert theme_hits(
+        "draw_game",
+        "If two or more players are tied for highest life total, the game is a draw.",
+    ) >= 1
+    # Stalemate locks that keep the game alive count too.
+    assert theme_hits(
+        "draw_game",
+        "You can't lose the game and your opponents can't win the game.",
+    ) >= 1
+    # The whole twist: ordinary card draw must NOT register.
+    assert theme_hits("draw_game", "Draw two cards.") == 0
+    assert theme_hits("draw_game", "Whenever you draw a card, gain 1 life.") == 0
+
+
 def test_resolve_colors_letters_and_names():
     assert resolve_colors("WUB") == {"W", "U", "B"}
     assert resolve_colors("esper") == {"W", "U", "B"}

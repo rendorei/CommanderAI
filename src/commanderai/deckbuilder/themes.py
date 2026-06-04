@@ -173,6 +173,22 @@ THEMES: dict[str, list[str]] = {
         r"prevent all combat damage",
         r"prevent all damage",
     ],
+    # "Oops all draw" — but the *game itself* ends in a draw, not card draw.
+    # Core enablers literally say "the game is a draw" (Divine Intervention,
+    # Celestial Convergence); the rest is the stalemate shell that keeps the game
+    # alive — can't-win/can't-lose locks and damage prevention — until you draw
+    # it. None of these patterns match ordinary "draw a card" text.
+    "draw_game": [
+        r"the game is a draw",
+        r"game (?:is|ends in|results in) a draw",
+        r"ends? in a draw",
+        r"can't win the game",
+        r"can't lose the game",
+        r"you don't lose the game",
+        r"no player can win",
+        r"prevent all combat damage",
+        r"prevent all damage",
+    ],
     "theft": [
         r"gain control of",
         r"exchange control",
@@ -279,6 +295,12 @@ ALIASES: dict[str, str] = {
     "ponza": "land_destruction",
     "wheel": "wheels",
     "group-hug": "group_hug",
+    "oops-all-draw": "draw_game",
+    "oops-all-draws": "draw_game",
+    "stalemate": "draw_game",
+    "the-game-is-a-draw": "draw_game",
+    "forced-draw": "draw_game",
+    "draw-the-game": "draw_game",
     "lifedrain": "lifedrain",
     "drain": "lifedrain",
     "zombie-tribal": "zombie",
@@ -327,6 +349,9 @@ THEME_QUOTA_DELTAS: dict[str, dict[str, int]] = {
     "lifedrain": {"UTILITY": 4, "THREAT": -2, "WIPE": -2},
     "counters": {"THREAT": 4, "WIPE": -2, "DRAW": -2},
     "land_destruction": {"UTILITY": 4, "THREAT": -2, "DRAW": -2},
+    # Stalemate/draw shell: gut the clock, stack removal+wipes+fogs to keep the
+    # board empty, dig with extra draw until a "game is a draw" piece lands.
+    "draw_game": {"THREAT": -12, "REMOVAL": 4, "WIPE": 3, "UTILITY": 8, "DRAW": 2, "RAMP": -2},
 }
 
 # Creature-tribe themes: 25-35 creatures + lords/anthems, less removal & few
